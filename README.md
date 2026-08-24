@@ -170,13 +170,6 @@ Files below `~/.config/omarchy/plugins/` hot-reload during development. Before p
 
 The plugin reads editor history only from local configuration files. It performs no network requests and sends no telemetry. Like every Omarchy shell plugin, it runs unsandboxed inside `omarchy-shell`; review third-party plugin code before installing it.
 
-## Store submission checklist
-
-- Commit the release and push this repository publicly to GitHub.
-- Keep the README version synchronized with [`manifest.json`](./manifest.json).
-- Verify that `preview.png` contains no sensitive project names or paths.
-- Submit the public repository URL to the [Omarchy Plugin Marketplace](https://github.com/HANCORE-linux/omarchy-plugin-marketplace/issues/new/choose) using category `Developer Tools` and one to three supported tags such as `bar` and `quickshell`.
-
 ## License
 
 [MIT](./LICENSE)
