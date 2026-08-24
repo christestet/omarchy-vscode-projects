@@ -32,7 +32,9 @@ Panel {
   property string copiedPath: ""
   property string pendingAction: ""
   property bool hasLoadedProjects: false
+  property bool loaderTimedOut: false
   readonly property int maxProjects: boundedInt(setting("maxProjects", 10), 3, 30)
+  readonly property int helperTimeoutMs: 1000
   readonly property bool newWindow: setting("openMode", "reuse") === "new"
   readonly property string helperPath: decodeURIComponent(String(Qt.resolvedUrl("recent_projects.py")).replace(/^file:\/\//, ""))
   readonly property string repositoryUrl: "https://github.com/christestet/omarchy-vscode-projects"
@@ -162,9 +164,13 @@ Panel {
     list.positionViewAtIndex(selectedIndex, ListView.Contain)
   }
 
-  function refresh() {
+  function refresh(notify) {
     if (loader.running) return
+    if (notify === true) {
+      Quickshell.execDetached(["omarchy", "notification", "send", "Refreshing VS Code projects", "Reading recent local projects", "-g", "󰑐"])
+    }
     output = ""
+    loaderTimedOut = false
     loader.command = ["/usr/bin/python3", helperPath, "list", "--limit", String(maxProjects)]
     loader.running = true
   }
@@ -240,7 +246,7 @@ Panel {
     else if (row.command === "back") { if (shortcutsOpen) leaveShortcuts(); else if (settingsOpen) leaveSettings(); else leaveActions() }
     else if (row.command === "folder") openFolderChooser()
     else if (row.command === "new") openNewWindow()
-    else if (row.command === "refresh") refresh()
+    else if (row.command === "refresh") refresh(true)
     else if (row.command === "open-mode") saveSetting("openMode", newWindow ? "reuse" : "new", false)
     else if (row.command === "unpin-all") {
       if (!confirmUnpinAll) { confirmUnpinAll = true; rebuildRows() }
@@ -273,7 +279,7 @@ Panel {
     function show(): void { root.open() }
     function hide(): void { root.close() }
     function toggle(): void { root.toggle() }
-    function refresh(): string { root.refresh(); return "ok" }
+    function refresh(): string { root.refresh(true); return "ok" }
     function openRecent(): string { root.openRecent(); return "ok" }
     function openFolder(): string { root.openFolderChooser(); return "ok" }
     function newWindow(): string { root.openNewWindow(); return "ok" }
@@ -283,7 +289,7 @@ Panel {
     id: loader
     stdout: SplitParser { onRead: data => root.appendHelperOutput(data) }
     onExited: function(code) {
-      var payload = code === 0 ? root.parsePayload(root.output) : ({})
+      var payload = code === 0 && !root.loaderTimedOut ? root.parsePayload(root.output) : ({})
       root.pinnedProjects = Array.isArray(payload.pinned) ? payload.pinned : []
       root.recentProjects = Array.isArray(payload.recent) ? payload.recent : []
       root.defaultEditor = String(payload.defaultEditor || "code")
@@ -294,6 +300,19 @@ Panel {
         root.pendingAction = ""
         root.openRecent()
       }
+    }
+  }
+  // This helper reads externally replaceable editor state. Keep a hard wall
+  // clock deadline outside Python so no malformed SQLite state can leave the
+  // long-running shell process waiting indefinitely.
+  Timer {
+    id: loaderDeadline
+    interval: root.helperTimeoutMs
+    repeat: false
+    running: loader.running
+    onTriggered: {
+      root.loaderTimedOut = true
+      loader.signal(9) // SIGKILL: a hard deadline even if the helper is stuck in I/O.
     }
   }
   Process { id: actionRunner; onExited: function(_) { root.actionProject = null; root.refresh() } }
@@ -328,7 +347,7 @@ Panel {
     text: "󰨞"
     tooltipText: "VS Code Projects  ·  Press Super+Alt+O to open"
     onPressed: function(code) {
-      if (code === Qt.RightButton) root.refresh()
+      if (code === Qt.RightButton) root.refresh(true)
       else if (code === Qt.MiddleButton) root.openNewWindow()
       else root.toggle()
     }
@@ -346,7 +365,7 @@ Panel {
       Keys.priority: Keys.BeforeItem
       Keys.onPressed: function(event) {
         if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_R) {
-          root.refresh(); event.accepted = true
+          root.refresh(true); event.accepted = true
         } else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_O) {
           root.openFolderChooser(); event.accepted = true
         } else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_N) {

@@ -28,7 +28,7 @@ class RecentProjectsTest(unittest.TestCase):
             storage = root / "Code/User/globalStorage/storage.json"
             storage.parent.mkdir(parents=True)
             storage.write_text(json.dumps({"entries": [{"folderUri": project.as_uri()}]}))
-            with patch.dict(os.environ, {"XDG_CONFIG_HOME": temp}):
+            with patch.dict(os.environ, {"XDG_CONFIG_HOME": temp, "VSCODE_SHARED_DATA_HOME": temp}):
                 rows = recent_projects.collect(5)
             self.assertEqual(rows[0]["path"], str(project))
             self.assertEqual(rows[0]["editor"], "code")
@@ -55,40 +55,107 @@ class RecentProjectsTest(unittest.TestCase):
 
     def test_sqlite_value_is_bounded(self):
         with tempfile.TemporaryDirectory() as temp:
-            user_dir = Path(temp) / "User"
-            database = user_dir / "globalStorage/state.vscdb"
-            database.parent.mkdir(parents=True)
+            database = Path(temp) / "state.vscdb"
             with sqlite3.connect(database) as db:
                 db.execute("CREATE TABLE ItemTable (key TEXT, value TEXT)")
                 db.execute("INSERT INTO ItemTable VALUES (?, ?)", ("history.recentlyOpenedPathsList", "x" * 20))
             with patch.object(recent_projects, "MAX_SQL_VALUE_BYTES", 16):
-                self.assertIsNone(recent_projects.history_from_db(user_dir))
+                self.assertIsNone(recent_projects.history_from_db(database))
 
     def test_sqlite_path_is_uri_encoded(self):
         with tempfile.TemporaryDirectory(prefix="vscode?#") as temp:
-            user_dir = Path(temp) / "User"
-            database = user_dir / "globalStorage/state.vscdb"
-            database.parent.mkdir(parents=True)
+            database = Path(temp) / "state.vscdb"
             with sqlite3.connect(database) as db:
                 db.execute("CREATE TABLE ItemTable (key TEXT, value TEXT)")
                 db.execute("INSERT INTO ItemTable VALUES (?, ?)", ("history.recentlyOpenedPathsList", "{}"))
-            self.assertEqual(recent_projects.history_from_db(user_dir), {})
+            self.assertEqual(recent_projects.history_from_db(database), {})
+
+    def test_reads_wal_backed_database_through_descriptor_snapshot(self):
+        with tempfile.TemporaryDirectory() as temp:
+            database = Path(temp) / "state.vscdb"
+            writer = sqlite3.connect(database)
+            try:
+                writer.execute("PRAGMA journal_mode = WAL")
+                writer.execute("CREATE TABLE ItemTable (key TEXT, value TEXT)")
+                writer.execute("INSERT INTO ItemTable VALUES (?, ?)", (
+                    "history.recentlyOpenedPathsList", json.dumps({"entries": [{"folderUri": "file:///tmp/project"}]}),
+                ))
+                writer.commit()
+                self.assertEqual(recent_projects.history_from_db(database), {
+                    "entries": [{"folderUri": "file:///tmp/project"}],
+                })
+            finally:
+                writer.close()
+
+    def test_rejects_oversized_sqlite_sidecar(self):
+        with tempfile.TemporaryDirectory() as temp:
+            database = Path(temp) / "state.vscdb"
+            database.touch()
+            Path(str(database) + "-wal").write_bytes(b"x" * 17)
+            with patch.object(recent_projects, "MAX_DATABASE_BYTES", 16):
+                self.assertIsNone(recent_projects.open_database_descriptors(database))
 
     def test_rejects_symlinked_sqlite_database(self):
         with tempfile.TemporaryDirectory() as temp:
-            user_dir = Path(temp) / "User"
-            database = user_dir / "globalStorage/state.vscdb"
-            database.parent.mkdir(parents=True)
+            database = Path(temp) / "state.vscdb"
             target = Path(temp) / "actual.vscdb"
             target.touch()
             database.symlink_to(target)
-            self.assertIsNone(recent_projects.history_from_db(user_dir))
+            self.assertIsNone(recent_projects.history_from_db(database))
 
-    def test_walk_recent_obeys_depth_and_node_limits(self):
-        value = {"first": {"folderUri": "/first"}, "second": {"folderUri": "/second"}}
-        self.assertEqual(list(recent_projects.walk_recent(value, max_nodes=2)), [("/first", "folder")])
-        deep = {"child": {"folderUri": "/too-deep"}}
-        self.assertEqual(list(recent_projects.walk_recent(deep, max_depth=0)), [])
+    def test_recent_entries_are_ordered_and_schema_bound(self):
+        value = {
+            "entries": [
+                {"folderUri": "/first"},
+                {"workspace": {"configPath": "/second.code-workspace"}},
+                {"nested": {"folderUri": "/ignored"}},
+            ]
+        }
+        self.assertEqual(list(recent_projects.recent_entries(value)), [
+            ("/first", "folder"),
+            ("/second.code-workspace", "workspace"),
+        ])
+
+    def test_recent_entries_are_bounded(self):
+        value = {"entries": [{"folderUri": f"/{index}"} for index in range(3)]}
+        with patch.object(recent_projects, "MAX_RECENT_ENTRIES", 2):
+            self.assertEqual(list(recent_projects.recent_entries(value)), [("/0", "folder"), ("/1", "folder")])
+
+    def test_collect_prefers_current_shared_history(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            current = root / "current"
+            legacy = root / "legacy"
+            current.mkdir()
+            legacy.mkdir()
+            database = root / ".vscode-shared/sharedStorage/state.vscdb"
+            database.parent.mkdir(parents=True)
+            with sqlite3.connect(database) as db:
+                db.execute("CREATE TABLE ItemTable (key TEXT, value TEXT)")
+                db.execute("INSERT INTO ItemTable VALUES (?, ?)", (
+                    "history.recentlyOpenedPathsList", json.dumps({"entries": [{"folderUri": current.as_uri()}]}),
+                ))
+            legacy_database = root / "Code/User/globalStorage/state.vscdb"
+            legacy_database.parent.mkdir(parents=True)
+            with sqlite3.connect(legacy_database) as db:
+                db.execute("CREATE TABLE ItemTable (key TEXT, value TEXT)")
+                db.execute("INSERT INTO ItemTable VALUES (?, ?)", (
+                    "history.recentlyOpenedPathsList", json.dumps({"entries": [{"folderUri": legacy.as_uri()}]}),
+                ))
+            with patch.dict(os.environ, {"XDG_CONFIG_HOME": temp, "VSCODE_SHARED_DATA_HOME": temp}):
+                rows = recent_projects.collect(5)
+            self.assertEqual([row["path"] for row in rows], [str(current)])
+
+    def test_does_not_scan_workspace_cache(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            project = root / "project"
+            project.mkdir()
+            workspace = root / "Code/User/workspaceStorage/stale/workspace.json"
+            workspace.parent.mkdir(parents=True)
+            workspace.write_text(json.dumps({"folder": project.as_uri()}))
+            with patch.dict(os.environ, {"XDG_CONFIG_HOME": temp, "VSCODE_SHARED_DATA_HOME": temp}):
+                self.assertEqual(recent_projects.collect(5), [])
 
     def test_collect_stops_after_requested_result_count(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -101,7 +168,7 @@ class RecentProjectsTest(unittest.TestCase):
             storage = root / "Code/User/globalStorage/storage.json"
             storage.parent.mkdir(parents=True)
             storage.write_text(json.dumps({"entries": [{"folderUri": path.as_uri()} for path in projects]}))
-            with patch.dict(os.environ, {"XDG_CONFIG_HOME": temp}):
+            with patch.dict(os.environ, {"XDG_CONFIG_HOME": temp, "VSCODE_SHARED_DATA_HOME": temp}):
                 rows = recent_projects.collect(1)
             self.assertEqual(len(rows), 1)
             self.assertEqual(recent_projects.collect(0), [])

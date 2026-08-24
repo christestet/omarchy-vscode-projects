@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-from itertools import islice
 import json
 import os
 from pathlib import Path
@@ -16,10 +15,10 @@ import tempfile
 from urllib.parse import unquote, urlparse
 
 EDITORS = (
-    ("code", "Code"),
-    ("code-insiders", "Code - Insiders"),
-    ("codium", "VSCodium"),
-    ("code-oss", "Code - OSS"),
+    ("code", "Code", ".vscode-shared"),
+    ("code-insiders", "Code - Insiders", ".vscode-insiders-shared"),
+    ("codium", "VSCodium", ".vscodium-shared"),
+    ("code-oss", "Code - OSS", ".vscode-oss-shared"),
 )
 
 # VS Code's state is replaceable, externally controlled input.  Keep every
@@ -28,9 +27,7 @@ MAX_JSON_BYTES = 1024 * 1024
 MAX_DATABASE_BYTES = 64 * 1024 * 1024
 MAX_SQL_VALUE_BYTES = MAX_JSON_BYTES
 MAX_SQL_STEPS = 100_000
-MAX_WORKSPACE_FILES = 256
-MAX_WALK_NODES = 4096
-MAX_WALK_DEPTH = 20
+MAX_RECENT_ENTRIES = 500
 MAX_PATH_CHARS = 2048
 MAX_NAME_CHARS = 256
 MAX_PINS = 100
@@ -71,16 +68,6 @@ def read_json(path: Path, max_bytes: int = MAX_JSON_BYTES) -> object | None:
         return None
 
 
-def regular_file_within(path: Path, max_bytes: int) -> bool:
-    try:
-        info = path.lstat()
-    except FileNotFoundError:
-        return False
-    except OSError:
-        return False
-    return stat.S_ISREG(info.st_mode) and info.st_size <= max_bytes
-
-
 def manifest_version(path: Path | None = None) -> str:
     target = path or Path(__file__).with_name("manifest.json")
     value = read_json(target)
@@ -91,7 +78,7 @@ def manifest_version(path: Path | None = None) -> str:
 
 
 def preferred_editor(rows: list[dict]) -> str:
-    available = [command for command, _ in EDITORS if shutil.which(command)]
+    available = [command for command, _, _ in EDITORS if shutil.which(command)]
     for row in rows:
         editor = str(row.get("editor", ""))
         if editor in available:
@@ -176,54 +163,90 @@ def add(rows: list[dict], seen: set[str], value: object, editor: str, kind: str 
     rows.append({"name": name or path, "path": path, "editor": editor, "kind": kind})
 
 
-def walk_recent(value: object, max_nodes: int = MAX_WALK_NODES, max_depth: int = MAX_WALK_DEPTH):
-    """Iteratively inspect a bounded portion of nested recent-project data."""
-    stack = [(value, 0)]
-    visited = 0
-    while stack and visited < max_nodes:
-        current, depth = stack.pop()
-        visited += 1
-        if isinstance(current, dict):
-            for key in ("folderUri", "workspace", "configPath"):
-                if key in current:
-                    candidate = current[key]
-                    if isinstance(candidate, dict):
-                        candidate = candidate.get("configPath") or candidate.get("path")
-                    if candidate:
-                        yield candidate, "workspace" if key in ("workspace", "configPath") else "folder"
-            if depth < max_depth:
-                remaining = max_nodes - visited
-                children = list(islice(current.values(), remaining))
-                stack.extend((child, depth + 1) for child in reversed(children))
-        elif isinstance(current, list) and depth < max_depth:
-            remaining = max_nodes - visited
-            stack.extend((child, depth + 1) for child in reversed(current[:remaining]))
+def recent_entries(value: object):
+    """Yield the documented, ordered entries from VS Code's MRU value."""
+    entries = value.get("entries") if isinstance(value, dict) else None
+    if not isinstance(entries, list):
+        return
+    for entry in entries[:MAX_RECENT_ENTRIES]:
+        if not isinstance(entry, dict):
+            continue
+        folder = entry.get("folderUri")
+        if folder:
+            yield folder, "folder"
+            continue
+        workspace = entry.get("workspace")
+        if isinstance(workspace, dict):
+            workspace = workspace.get("configPath") or workspace.get("path")
+        workspace = workspace or entry.get("configPath")
+        if workspace:
+            yield workspace, "workspace"
 
 
-def history_from_db(user_dir: Path) -> object | None:
-    database = user_dir / "globalStorage" / "state.vscdb"
-    if not regular_file_within(database, MAX_DATABASE_BYTES):
-        return None
-    for suffix in ("-wal", "-shm", "-journal"):
-        auxiliary = Path(str(database) + suffix)
-        try:
-            exists = auxiliary.exists() or auxiliary.is_symlink()
-        except OSError:
-            return None
-        if exists and not regular_file_within(auxiliary, MAX_DATABASE_BYTES):
-            return None
+def open_database_descriptors(database: Path) -> list[tuple[str, int]] | None:
+    """Open a bounded database snapshot without following replaceable paths."""
+    descriptors: list[tuple[str, int]] = []
+    complete = False
     try:
-        uri = database.absolute().as_uri() + "?mode=ro"
-        with sqlite3.connect(uri, uri=True, timeout=0.2) as db:
-            db.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, MAX_SQL_VALUE_BYTES)
-            db.set_progress_handler(lambda: 1, MAX_SQL_STEPS)
-            row = db.execute(
-                "SELECT value FROM ItemTable WHERE key = ? AND length(CAST(value AS BLOB)) <= ? LIMIT 1",
-                ("history.recentlyOpenedPathsList", MAX_SQL_VALUE_BYTES),
-            ).fetchone()
+        for suffix in ("", "-wal", "-shm", "-journal"):
+            try:
+                descriptor = os.open(str(database) + suffix, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            except FileNotFoundError:
+                if suffix:
+                    continue
+                return None
+            try:
+                info = os.fstat(descriptor)
+            except OSError:
+                os.close(descriptor)
+                raise
+            if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_DATABASE_BYTES:
+                os.close(descriptor)
+                return None
+            descriptors.append((suffix, descriptor))
+        complete = True
+        return descriptors
+    except OSError:
+        return None
+    finally:
+        if not complete:
+            for _, descriptor in descriptors:
+                os.close(descriptor)
+
+
+def history_from_db(database: Path) -> object | None:
+    """Read VS Code history through descriptor-bound database and sidecar files."""
+    descriptors = open_database_descriptors(database)
+    if descriptors is None:
+        return None
+    try:
+        # SQLite accepts /proc/self/fd links.  A private directory gives the
+        # connection stable names for WAL/SHM sidecars while every name resolves
+        # to an already-open, checked descriptor rather than editor-controlled
+        # paths.  A sidecar created after this snapshot is safely ignored.
+        with tempfile.TemporaryDirectory(prefix="vscode-projects-") as staged:
+            staged_database = Path(staged) / "state.vscdb"
+            for suffix, descriptor in descriptors:
+                os.symlink(f"/proc/self/fd/{descriptor}", str(staged_database) + suffix)
+            uri = staged_database.absolute().as_uri() + "?mode=ro"
+            with sqlite3.connect(uri, uri=True, timeout=0.2) as db:
+                db.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, MAX_SQL_VALUE_BYTES)
+                db.set_progress_handler(lambda: 1, MAX_SQL_STEPS)
+                row = db.execute(
+                    "SELECT value FROM ItemTable WHERE key = ? AND length(CAST(value AS BLOB)) <= ? LIMIT 1",
+                    ("history.recentlyOpenedPathsList", MAX_SQL_VALUE_BYTES),
+                ).fetchone()
         return json.loads(row[0]) if row else None
     except (OSError, sqlite3.Error, ValueError, TypeError, RecursionError):
         return None
+    finally:
+        for _, descriptor in descriptors:
+            os.close(descriptor)
+
+
+def shared_data_home() -> Path:
+    """Return VS Code's default shared-data parent (overridable for testing)."""
+    return Path(os.environ.get("VSCODE_SHARED_DATA_HOME", Path.home()))
 
 
 def collect(limit: int, excluded: set[str] | None = None) -> list[dict]:
@@ -233,41 +256,18 @@ def collect(limit: int, excluded: set[str] | None = None) -> list[dict]:
     config = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
     rows: list[dict] = []
     seen: set[str] = set(excluded or ())
-    for executable, dirname in EDITORS:
+    for executable, dirname, shared_dirname in EDITORS:
         if len(rows) >= limit:
             break
         user_dir = config / dirname / "User"
-        data = history_from_db(user_dir)
+        data = history_from_db(shared_data_home() / shared_dirname / "sharedStorage" / "state.vscdb")
+        if data is None:
+            data = history_from_db(user_dir / "globalStorage" / "state.vscdb")
         if data is None:
             storage = user_dir / "globalStorage" / "storage.json"
             data = read_json(storage)
-        for value, kind in walk_recent(data):
+        for value, kind in recent_entries(data):
             add(rows, seen, value, executable, kind)
-            if len(rows) >= limit:
-                break
-        if len(rows) >= limit:
-            continue
-        workspace_storage = user_dir / "workspaceStorage"
-        try:
-            metadata = []
-            with os.scandir(workspace_storage) as entries:
-                for inspected, entry in enumerate(entries):
-                    if inspected >= MAX_WORKSPACE_FILES:
-                        break
-                    try:
-                        item = Path(entry.path) / "workspace.json"
-                        if entry.is_dir(follow_symlinks=False) and item.is_file():
-                            metadata.append((item.stat().st_mtime, item))
-                    except OSError:
-                        continue
-            metadata.sort(key=lambda pair: pair[0], reverse=True)
-        except OSError:
-            metadata = []
-        for _, item in metadata:
-            doc = read_json(item)
-            if not isinstance(doc, dict):
-                continue
-            add(rows, seen, doc.get("folder") or doc.get("workspace"), executable)
             if len(rows) >= limit:
                 break
     return rows[:limit]

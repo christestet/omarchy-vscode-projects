@@ -2,7 +2,7 @@
 
 A compact, keyboard-friendly Omarchy bar widget for opening recent and pinned VS Code projects.
 
-Current version: [`0.3.1`](./manifest.json) · License: [MIT](./LICENSE) · Requires Omarchy 4.0+
+Current version: [`0.3.3`](./manifest.json) · License: [MIT](./LICENSE) · Requires Omarchy 4.0+
 
 ![VS Code Projects panel showing pinned, recent, actions, and header controls](./preview.png)
 
@@ -57,7 +57,7 @@ omarchy bar move christestet.vscode-projects --section right
 | Input | Action |
 |---|---|
 | Left click | Open or close the projects panel |
-| Right click | Refresh recent projects |
+| Right click | Refresh recent projects and show a confirmation notification |
 | Middle click | Open a new VS Code window |
 
 Hovering the icon shows the panel name and its `Super+Alt+O` shortcut in a concise native Omarchy tooltip.
@@ -75,7 +75,7 @@ Hovering the icon shows the panel name and its `Super+Alt+O` shortcut in a conci
 | 1–9 | Open the corresponding visible project |
 | Ctrl+O | Open a folder picker |
 | Ctrl+N | Open a new VS Code window |
-| Ctrl+R | Refresh recent projects |
+| Ctrl+R | Refresh recent projects and show a confirmation notification |
 
 ### Project actions
 
@@ -92,7 +92,7 @@ Select the gear button beside **VS Code Projects** to open Settings. From there 
 
 - Set the number of recent projects shown with a slider (3–30).
 - Choose whether projects reuse the current editor window or open a new one.
-- Refresh the project history.
+- Refresh the project history with a confirmation notification.
 - Unpin all projects with a second-press confirmation.
 
 The slider supports dragging, clicking, and mouse-wheel adjustments. `−` and `+` remain available for keyboard adjustment. Changes are persisted through Omarchy's native bar configuration.
@@ -151,9 +151,9 @@ Check `omarchy menu keybindings --print` first and change the chords if they con
 
 ## How it works
 
-`Panel.qml` renders the native bar button and popup. The folder picker runs as a separate Zenity process so GTK is kept outside the long-running Quickshell process. `recent_projects.py` reads the `history.recentlyOpenedPathsList` value from each editor's local `state.vscdb` database and falls back to workspace metadata when needed. It uses `/usr/bin/python3`, requires no third-party Python packages, and opens SQLite in read-only mode. Global actions automatically use the first available editor, preferring the editor associated with a pinned or recent project.
+`Panel.qml` renders the native bar button and popup. The folder picker runs as a separate Zenity process so GTK is kept outside the long-running Quickshell process. `recent_projects.py` reads the ordered `history.recentlyOpenedPathsList` value from each editor's shared `state.vscdb` database (used by current VS Code) and falls back to the editor-local database and then legacy `storage.json`. It intentionally does not scan `workspaceStorage`, which is a cache rather than the Open Recent list. The helper uses `/usr/bin/python3`, requires no third-party Python packages, and opens SQLite in read-only mode. Global actions automatically use the first available editor, preferring the editor associated with a pinned or recent project.
 
-Editor state is treated as untrusted, replaceable input. JSON values are limited to 1 MiB, SQLite databases and sidecars to 64 MiB, recursive history traversal to 4,096 nodes and 20 levels, and workspace discovery to 256 entries per editor. SQLite work, returned projects, pin data, helper output, and QML output accumulation are also bounded. Oversized or malformed state is ignored so it cannot exhaust the long-running shell process.
+Editor state is treated as untrusted, replaceable input. JSON values and SQLite values are limited to 1 MiB; SQLite databases and sidecars to 64 MiB; and canonical history entries to 500. The helper opens the database and any WAL/SHM/journal sidecars as non-symlinked descriptors and presents those descriptors through a private SQLite namespace, preventing a path replacement from changing the checked files. SQLite work, returned projects, pin data, helper output, and QML output accumulation are bounded. The panel also force-kills a stalled helper after one second, so malformed state cannot leave the long-running shell process waiting indefinitely.
 
 Supported editor data directories:
 
@@ -163,6 +163,8 @@ Supported editor data directories:
 | VS Code Insiders | `~/.config/Code - Insiders` |
 | VSCodium | `~/.config/VSCodium` |
 | Code OSS | `~/.config/Code - OSS` |
+
+For current VS Code releases, the preferred MRU sources are `~/.vscode-shared/sharedStorage/state.vscdb`, `~/.vscode-insiders-shared/sharedStorage/state.vscdb`, and the equivalent VSCodium or Code OSS shared-data directories. The editor-local paths above remain compatibility fallbacks.
 
 ## Updating and removal
 

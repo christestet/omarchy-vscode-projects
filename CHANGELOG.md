@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.3 — 2026-08-24
+
+- Show an Omarchy confirmation notification for explicit project-history refreshes from the panel, bar, shortcut, or IPC action.
+
+## 0.3.2 — 2026-08-24
+
+- Read current VS Code's shared, ordered Open Recent database first, with legacy database and JSON fallbacks.
+- Remove `workspaceStorage` cache discovery so stale cache entries cannot appear as recent projects.
+- Make SQLite database and sidecar access descriptor-bound, closing the path replacement gap in the previous size/type checks.
+- Force-kill the QML helper after one second if it stalls on replaceable editor state.
+
 ## 0.3.1 — 2026-08-24
 
 - Bound regular-file and SQLite reads, query work, recursive history traversal, workspace discovery, result counts, and helper/QML output.
