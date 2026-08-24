@@ -9,6 +9,12 @@ import recent_projects
 
 
 class RecentProjectsTest(unittest.TestCase):
+    def test_reads_manifest_version(self):
+        with tempfile.TemporaryDirectory() as temp:
+            manifest = Path(temp) / "manifest.json"
+            manifest.write_text(json.dumps({"version": "1.2.3"}))
+            self.assertEqual(recent_projects.manifest_version(manifest), "1.2.3")
+
     def test_file_uri(self):
         self.assertEqual(recent_projects.local_path("file:///tmp/hello%20world"), "/tmp/hello world")
         self.assertIsNone(recent_projects.local_path("vscode-remote://ssh-remote/project"))
@@ -35,6 +41,16 @@ class RecentProjectsTest(unittest.TestCase):
                 recent_projects.set_pin(str(project), "codium", "folder", True)
                 self.assertEqual(recent_projects.load_pins()[0]["path"], str(project))
                 recent_projects.set_pin(str(project), "codium", "folder", False)
+                self.assertEqual(recent_projects.load_pins(), [])
+
+    def test_clear_pins(self):
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp) / "favorite"
+            project.mkdir()
+            config = Path(temp) / "config"
+            with patch.dict(os.environ, {"XDG_CONFIG_HOME": str(config)}):
+                recent_projects.set_pin(str(project), "code", "folder", True)
+                recent_projects.clear_pins()
                 self.assertEqual(recent_projects.load_pins(), [])
 
     def test_prefers_available_editor_used_by_project(self):

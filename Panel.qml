@@ -8,23 +8,33 @@ import qs.Ui
 Panel {
   id: root
   moduleName: "christestet.vscode-projects"
-  ipcTarget: moduleName
+  // Bar widgets are always loaded. Own a direct IPC target for action
+  // commands; shell.call only routes to separately loaded panel plugins.
+  ipcTarget: ""
   manageIpc: false
 
   property var pinnedProjects: []
   property var recentProjects: []
   property var rows: []
   property var actionProject: null
+  property bool settingsOpen: false
+  property bool shortcutsOpen: false
+  property bool confirmUnpinAll: false
   property string filterText: ""
   property int selectedIndex: 0
   property bool cursorActive: false
   property string output: ""
   property string chooserOutput: ""
   property string defaultEditor: "code"
+  property string appVersion: ""
   property string copiedPath: ""
+  property string pendingAction: ""
+  property bool hasLoadedProjects: false
   readonly property int maxProjects: boundedInt(setting("maxProjects", 10), 3, 30)
   readonly property bool newWindow: setting("openMode", "reuse") === "new"
   readonly property string helperPath: decodeURIComponent(String(Qt.resolvedUrl("recent_projects.py")).replace(/^file:\/\//, ""))
+  readonly property string repositoryUrl: "https://github.com/christestet/omarchy-vscode-projects"
+  readonly property string repositoryName: repositoryUrl.substring(repositoryUrl.lastIndexOf("/") + 1)
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
@@ -63,6 +73,38 @@ Panel {
         {rowType: "command", command: "pin", label: actionProject.pinned ? "Unpin project" : "Pin project", icon: actionProject.pinned ? "󰤱" : ""},
         {rowType: "command", command: "back", label: "Back to projects", icon: ""}
       ]
+    } else if (shortcutsOpen) {
+      next = [
+        {rowType: "section", label: "GLOBAL"},
+        {rowType: "info", label: "Toggle projects panel", icon: "󰨞", shortcut: "Super Alt O"},
+        {rowType: "info", label: "Open most recent project", icon: "󰐕", shortcut: "Super Ctrl Alt O"},
+        {rowType: "section", label: "PANEL"},
+        {rowType: "info", label: "Search projects", icon: "", shortcut: "Type"},
+        {rowType: "info", label: "Navigate", icon: "", shortcut: "↑ / ↓"},
+        {rowType: "info", label: "Open selected project", icon: "󰌑", shortcut: "Enter"},
+        {rowType: "info", label: "Open in new window", icon: "󰐕", shortcut: "Shift Enter"},
+        {rowType: "info", label: "Show project actions", icon: "󰜴", shortcut: "→"},
+        {rowType: "info", label: "Quick-open visible project", icon: "󰎠", shortcut: "1–9"},
+        {rowType: "info", label: "Open folder picker", icon: "", shortcut: "Ctrl O"},
+        {rowType: "info", label: "New VS Code window", icon: "󰐕", shortcut: "Ctrl N"},
+        {rowType: "info", label: "Refresh projects", icon: "󰑐", shortcut: "Ctrl R"},
+        {rowType: "info", label: "Back or close", icon: "󰅖", shortcut: "Esc"},
+        {rowType: "section", label: "MOUSE"},
+        {rowType: "info", label: "Toggle panel / open project", icon: "󰍽", shortcut: "Left click"},
+        {rowType: "info", label: "Refresh from bar / actions", icon: "󰍽", shortcut: "Right click"},
+        {rowType: "info", label: "Open in new window", icon: "󰍽", shortcut: "Middle click"},
+        {rowType: "command", command: "back", label: "Back to projects", icon: ""}
+      ]
+    } else if (settingsOpen) {
+      next = [
+        {rowType: "section", label: "PROJECT DEFAULTS"},
+        {rowType: "slider", command: "recent-limit", label: "Recent projects", value: maxProjects},
+        {rowType: "command", command: "open-mode", label: "Default open mode", detail: newWindow ? "New window" : "Reuse current window", icon: "", shortcut: newWindow ? "NEW" : "REUSE"},
+        {rowType: "section", label: "MAINTENANCE"},
+        {rowType: "command", command: "refresh", label: "Refresh projects", icon: "󰑐", shortcut: "Ctrl R"},
+        {rowType: "command", command: "unpin-all", label: confirmUnpinAll ? ("Press again to unpin " + pinnedProjects.length + " projects") : "Unpin all projects", detail: pinnedProjects.length === 0 ? "No pinned projects" : "This keeps the projects in VS Code history", icon: confirmUnpinAll ? "" : "󰤱", disabled: pinnedProjects.length === 0},
+        {rowType: "command", command: "back", label: "Back to projects", icon: ""}
+      ]
     } else if (query) {
       for (var p = 0; p < pinnedProjects.length; p++) if (matches(pinnedProjects[p], query)) next.push(projectRow(pinnedProjects[p], true))
       for (var r = 0; r < recentProjects.length; r++) if (matches(recentProjects[r], query)) next.push(projectRow(recentProjects[r], false))
@@ -79,15 +121,15 @@ Panel {
         next.push({rowType: "empty", label: "No recent local projects", detail: "Open a folder in VS Code to get started"})
       }
       next.push({rowType: "section", label: "ACTIONS"})
-      next.push({rowType: "command", command: "folder", label: "Open folder…", icon: ""})
-      next.push({rowType: "command", command: "new", label: "New VS Code window", icon: "󰐕"})
+      next.push({rowType: "command", command: "folder", label: "Open folder…", icon: "", shortcut: "Ctrl O"})
+      next.push({rowType: "command", command: "new", label: "New VS Code window", icon: "󰐕", shortcut: "Ctrl N"})
     }
     rows = next
     selectedIndex = firstSelectable()
     cursorActive = false
   }
 
-  function selectable(row) { return row && row.rowType !== "section" && row.rowType !== "empty" }
+  function selectable(row) { return row && row.rowType !== "section" && row.rowType !== "empty" && row.rowType !== "slider" && row.rowType !== "info" && !row.disabled }
   function firstSelectable() {
     for (var i = 0; i < rows.length; i++) if (selectable(rows[i])) return i
     return 0
@@ -113,6 +155,26 @@ Panel {
     loader.running = true
   }
 
+  function openRecent() {
+    var project = recentProjects.length > 0 ? projectRow(recentProjects[0], false)
+      : (pinnedProjects.length > 0 ? projectRow(pinnedProjects[0], true) : null)
+    if (project) openProject(project, false)
+    else if (!hasLoadedProjects) { pendingAction = "recent"; refresh() }
+    else Quickshell.execDetached(["omarchy", "notification", "send", "No recent VS Code projects", "Open a local folder first", "-g", "󰨞"])
+  }
+
+  function openFolderChooser() {
+    if (folderChooser.running) return
+    chooserOutput = ""
+    folderChooser.command = ["zenity", "--file-selection", "--directory", "--title=Open folder in VS Code"]
+    folderChooser.running = true
+  }
+
+  function openNewWindow() {
+    Quickshell.execDetached(["uwsm-app", "--", defaultEditor, "--new-window"])
+    close()
+  }
+
   function openProject(project, forceNew) {
     if (!project || !project.path) return
     var mode = forceNew || newWindow ? "--new-window" : "--reuse-window"
@@ -120,8 +182,18 @@ Panel {
     close()
   }
 
-  function showActions(project) { if (project && project.rowType === "project") { actionProject = project; filterText = ""; rebuildRows() } }
+  function showActions(project) { if (project && project.rowType === "project") { actionProject = project; settingsOpen = false; shortcutsOpen = false; filterText = ""; rebuildRows() } }
   function leaveActions() { actionProject = null; rebuildRows() }
+  function showSettings() { actionProject = null; settingsOpen = true; shortcutsOpen = false; confirmUnpinAll = false; filterText = ""; rebuildRows() }
+  function leaveSettings() { settingsOpen = false; confirmUnpinAll = false; rebuildRows() }
+  function showShortcuts() { actionProject = null; settingsOpen = false; shortcutsOpen = true; confirmUnpinAll = false; filterText = ""; rebuildRows() }
+  function leaveShortcuts() { shortcutsOpen = false; rebuildRows() }
+  function saveSetting(key, value, jsonValue) {
+    if (settingsRunner.running) return
+    settingsRunner.command = ["omarchy", "bar", "set", moduleName, key, String(value)]
+    if (jsonValue) settingsRunner.command.push("--json")
+    settingsRunner.running = true
+  }
   function togglePin(project) {
     actionRunner.command = ["/usr/bin/python3", helperPath, project.pinned ? "unpin" : "pin", "--path", project.path, "--editor", project.editor, "--kind", project.kind]
     actionRunner.running = true
@@ -151,12 +223,19 @@ Panel {
     else if (row.command === "files") { Quickshell.execDetached(["uwsm-app", "--", "nautilus", projectDirectory(project)]); close() }
     else if (row.command === "copy") copyPath(project.path)
     else if (row.command === "pin") togglePin(project)
-    else if (row.command === "back") leaveActions()
-    else if (row.command === "folder") {
-      chooserOutput = ""
-      folderChooser.command = ["zenity", "--file-selection", "--directory", "--title=Open folder in VS Code"]
-      folderChooser.running = true
-    } else if (row.command === "new") { Quickshell.execDetached(["uwsm-app", "--", defaultEditor, "--new-window"]); close() }
+    else if (row.command === "back") { if (shortcutsOpen) leaveShortcuts(); else if (settingsOpen) leaveSettings(); else leaveActions() }
+    else if (row.command === "folder") openFolderChooser()
+    else if (row.command === "new") openNewWindow()
+    else if (row.command === "refresh") refresh()
+    else if (row.command === "open-mode") saveSetting("openMode", newWindow ? "reuse" : "new", false)
+    else if (row.command === "unpin-all") {
+      if (!confirmUnpinAll) { confirmUnpinAll = true; rebuildRows() }
+      else {
+        confirmUnpinAll = false
+        actionRunner.command = ["/usr/bin/python3", helperPath, "unpin-all"]
+        actionRunner.running = true
+      }
+    }
   }
 
   function activate(index, forceNew) {
@@ -166,21 +245,24 @@ Panel {
     else runCommand(row)
   }
 
-  function setFilter(value) { filterText = value; actionProject = null; rebuildRows() }
+  function setFilter(value) { filterText = value; actionProject = null; settingsOpen = false; shortcutsOpen = false; rebuildRows() }
 
   onOpenedChanged: if (opened) {
-    filterText = ""; actionProject = null; refresh()
+    filterText = ""; actionProject = null; settingsOpen = false; shortcutsOpen = false; confirmUnpinAll = false; refresh()
     Qt.callLater(function() { keys.forceActiveFocus() })
   }
 
   IpcHandler {
-    target: root.ipcTarget
+    target: root.moduleName
     function open(): void { root.open() }
     function close(): void { root.close() }
     function show(): void { root.open() }
     function hide(): void { root.close() }
     function toggle(): void { root.toggle() }
     function refresh(): string { root.refresh(); return "ok" }
+    function openRecent(): string { root.openRecent(); return "ok" }
+    function openFolder(): string { root.openFolderChooser(); return "ok" }
+    function newWindow(): string { root.openNewWindow(); return "ok" }
   }
 
   Process {
@@ -191,10 +273,17 @@ Panel {
       root.pinnedProjects = Array.isArray(payload.pinned) ? payload.pinned : []
       root.recentProjects = Array.isArray(payload.recent) ? payload.recent : []
       root.defaultEditor = String(payload.defaultEditor || "code")
+      root.appVersion = String(payload.version || "")
+      root.hasLoadedProjects = true
       root.rebuildRows()
+      if (root.pendingAction === "recent") {
+        root.pendingAction = ""
+        root.openRecent()
+      }
     }
   }
   Process { id: actionRunner; onExited: function(_) { root.actionProject = null; root.refresh() } }
+  Process { id: settingsRunner; onExited: function(_) { root.rebuildRows() } }
   Process {
     id: clipboardWriter
     onExited: function(code) {
@@ -223,10 +312,10 @@ Panel {
     anchors.fill: parent
     bar: root.bar
     text: "󰨞"
-    tooltipText: "Left: projects · Right: refresh · Middle: new window"
+    tooltipText: "VS Code Projects  ·  Press Super+Alt+O to open"
     onPressed: function(code) {
       if (code === Qt.RightButton) root.refresh()
-      else if (code === Qt.MiddleButton) Quickshell.execDetached(["uwsm-app", "--", root.defaultEditor, "--new-window"])
+      else if (code === Qt.MiddleButton) root.openNewWindow()
       else root.toggle()
     }
   }
@@ -242,19 +331,39 @@ Panel {
       focus: true
       Keys.priority: Keys.BeforeItem
       Keys.onPressed: function(event) {
-        if (event.key === Qt.Key_Escape) {
-          if (root.actionProject) root.leaveActions(); else if (root.filterText) root.setFilter(""); else root.close()
+        if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_R) {
+          root.refresh(); event.accepted = true
+        } else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_O) {
+          root.openFolderChooser(); event.accepted = true
+        } else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_N) {
+          root.openNewWindow(); event.accepted = true
+        } else if (root.settingsOpen && (event.key === Qt.Key_Minus || event.key === Qt.Key_Underscore)) {
+          root.saveSetting("maxProjects", Math.max(3, root.maxProjects - 1), true); event.accepted = true
+        } else if (root.settingsOpen && (event.key === Qt.Key_Plus || event.key === Qt.Key_Equal)) {
+          root.saveSetting("maxProjects", Math.min(30, root.maxProjects + 1), true); event.accepted = true
+        } else if (event.key >= Qt.Key_1 && event.key <= Qt.Key_9 && event.modifiers === Qt.NoModifier && !root.filterText && !root.actionProject) {
+          var wanted = event.key - Qt.Key_1
+          var found = 0
+          for (var i = 0; i < root.rows.length; i++) {
+            if (root.rows[i].rowType !== "project") continue
+            if (found === wanted) { root.openProject(root.rows[i], false); break }
+            found++
+          }
           event.accepted = true
-        } else if (Util.editsFilter(event, root.filterText)) {
+        } else if (event.key === Qt.Key_Escape) {
+          if (root.actionProject) root.leaveActions(); else if (root.shortcutsOpen) root.leaveShortcuts(); else if (root.settingsOpen) root.leaveSettings(); else if (root.filterText) root.setFilter(""); else root.close()
+          event.accepted = true
+        } else if (!root.settingsOpen && !root.shortcutsOpen && Util.editsFilter(event, root.filterText)) {
           root.setFilter(Util.editedFilter(event, root.filterText)); event.accepted = true
         } else if (event.key === Qt.Key_Up) { root.move(-1); event.accepted = true
         } else if (event.key === Qt.Key_Down) { root.move(1); event.accepted = true
         } else if (event.key === Qt.Key_Right && root.rows[root.selectedIndex] && root.rows[root.selectedIndex].rowType === "project") {
           root.showActions(root.rows[root.selectedIndex]); event.accepted = true
-        } else if (event.key === Qt.Key_Left && root.actionProject) { root.leaveActions(); event.accepted = true
+        } else if (event.key === Qt.Key_Left && (root.actionProject || root.settingsOpen || root.shortcutsOpen)) {
+          if (root.shortcutsOpen) root.leaveShortcuts(); else if (root.settingsOpen) root.leaveSettings(); else root.leaveActions(); event.accepted = true
         } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
           root.activate(root.selectedIndex, (event.modifiers & Qt.ShiftModifier) !== 0); event.accepted = true
-        } else if (!root.actionProject && event.text && event.text.length === 1 && event.text.charCodeAt(0) >= 32 && event.text.charCodeAt(0) !== 127 && (event.modifiers === Qt.NoModifier || event.modifiers === Qt.ShiftModifier)) {
+        } else if (!root.actionProject && !root.settingsOpen && !root.shortcutsOpen && event.text && event.text.length === 1 && event.text.charCodeAt(0) >= 32 && event.text.charCodeAt(0) !== 127 && (event.modifiers === Qt.NoModifier || event.modifiers === Qt.ShiftModifier)) {
           root.setFilter(root.filterText + event.text); event.accepted = true
         }
       }
@@ -266,9 +375,12 @@ Panel {
         anchors.top: parent.top
         spacing: Style.space(12)
         PanelHero {
+          id: hero
           width: parent.width
           title: root.actionProject ? root.actionProject.name : "VS Code Projects"
-          meta: root.actionProject ? "PROJECT ACTIONS" : (root.filterText ? "SEARCH: " + root.filterText : (root.pinnedProjects.length + " pinned · " + root.recentProjects.length + " recent"))
+          meta: root.actionProject ? "PROJECT ACTIONS" : (root.shortcutsOpen ? "SHORTCUTS" : (root.settingsOpen ? "SETTINGS" : (root.filterText ? "SEARCH: " + root.filterText : (root.pinnedProjects.length + " pinned · " + root.recentProjects.length + " recent"))))
+          function toggleSettings() { if (root.settingsOpen) root.leaveSettings(); else root.showSettings() }
+          function toggleShortcuts() { if (root.shortcutsOpen) root.leaveShortcuts(); else root.showShortcuts() }
           iconComponent: Component {
             Item {
               implicitWidth: Style.space(34); implicitHeight: Style.space(34)
@@ -277,16 +389,60 @@ Panel {
           }
           foreground: root.bar ? root.bar.foreground : Color.foreground
           fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+          trailingControl: Component {
+            Row {
+              visible: hero.meta !== "PROJECT ACTIONS"
+              spacing: Style.space(3)
+              PanelActionButton {
+                iconText: ""
+                tooltipText: hero.meta === "SHORTCUTS" ? "Back to projects" : "Show shortcuts"
+                foreground: hero.foreground
+                fontFamily: hero.fontFamily
+                fontSize: Style.font.icon
+                size: Style.space(28)
+                hasCursor: hero.meta === "SHORTCUTS"
+                onClicked: hero.toggleShortcuts()
+              }
+              PanelActionButton {
+                iconText: ""
+                tooltipText: hero.meta === "SETTINGS" ? "Back to projects" : "Settings"
+                foreground: hero.foreground
+                fontFamily: hero.fontFamily
+                fontSize: Style.font.icon
+                size: Style.space(28)
+                hasCursor: hero.meta === "SETTINGS"
+                onClicked: hero.toggleSettings()
+              }
+            }
+          }
         }
-        Text {
-          visible: !root.actionProject
+        Rectangle {
+          visible: !root.actionProject && !root.settingsOpen && !root.shortcutsOpen && !root.filterText
           width: parent.width
-          text: root.filterText ? ("SEARCH  " + root.filterText) : "LEFT OPEN  ·  RIGHT ACTIONS  ·  MIDDLE NEW WINDOW"
-          color: Qt.darker(root.bar ? root.bar.foreground : Color.foreground, 1.4)
-          font.family: root.bar ? root.bar.fontFamily : Style.font.family
-          font.pixelSize: Style.font.caption
-          font.bold: true
-          font.letterSpacing: 0.6
+          height: Style.space(42)
+          radius: Style.cornerRadius
+          color: Qt.rgba((root.bar ? root.bar.foreground : Color.foreground).r,
+                         (root.bar ? root.bar.foreground : Color.foreground).g,
+                         (root.bar ? root.bar.foreground : Color.foreground).b, 0.055)
+          Column {
+            anchors.centerIn: parent
+            spacing: Style.space(3)
+            Text {
+              anchors.horizontalCenter: parent.horizontalCenter
+              text: "TYPE TO SEARCH   ·   ↑↓ NAVIGATE   ·   ENTER OPEN"
+              color: Qt.darker(root.bar ? root.bar.foreground : Color.foreground, 1.25)
+              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.pixelSize: Style.font.caption
+              font.bold: true
+            }
+            Text {
+              anchors.horizontalCenter: parent.horizontalCenter
+              text: "1–9 QUICK OPEN   ·   → ACTIONS   ·   ESC CLOSE"
+              color: Qt.darker(root.bar ? root.bar.foreground : Color.foreground, 1.45)
+              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.pixelSize: Style.font.caption
+            }
+          }
         }
         ListView {
           id: list
@@ -303,7 +459,8 @@ Panel {
             readonly property var row: modelData
             readonly property bool selected: root.cursorActive && index === root.selectedIndex
             width: ListView.view.width
-            height: row.rowType === "section" ? Style.space(38) : (row.detail || row.rowType === "project" ? Style.space(44) : Style.space(38))
+            height: row.rowType === "section" ? Style.space(38) : (row.rowType === "slider" ? Style.space(58) : (row.detail || row.rowType === "project" ? Style.space(44) : Style.space(38)))
+            opacity: row.disabled ? 0.45 : 1
             radius: Style.cornerRadius
             color: (selected || mouse.containsMouse) && root.selectable(row) ? Color.menu.selectedBackground : "transparent"
             PanelSeparator {
@@ -322,7 +479,7 @@ Panel {
               fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
             }
             Row {
-              visible: row.rowType !== "section"
+              visible: row.rowType !== "section" && row.rowType !== "slider"
               anchors.fill: parent; anchors.leftMargin: Style.space(8); anchors.rightMargin: Style.space(8)
               spacing: Style.space(8)
               Text {
@@ -332,12 +489,13 @@ Panel {
                 font.family: root.bar ? root.bar.fontFamily : Style.font.family
               }
               Column {
-                width: parent.width - Style.space(28); anchors.verticalCenter: parent.verticalCenter
+                width: parent.width - Style.space(28) - (shortcutLabel.visible ? shortcutLabel.implicitWidth + Style.space(8) : 0); anchors.verticalCenter: parent.verticalCenter
                 Text {
                   width: parent.width; elide: Text.ElideRight
                   text: row.rowType === "project" ? row.name : row.label
                   color: (parent.parent.parent.selected || mouse.containsMouse) && root.selectable(row) ? Color.menu.selectedText : (root.bar ? root.bar.foreground : Color.foreground)
                   font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                  font.pixelSize: Style.font.bodySmall
                 }
                 Text {
                   visible: row.rowType === "project" || Boolean(row.detail)
@@ -348,10 +506,57 @@ Panel {
                   font.pixelSize: Style.font.caption
                 }
               }
+              Text {
+                id: shortcutLabel
+                visible: Boolean(row.shortcut)
+                anchors.verticalCenter: parent.verticalCenter
+                text: row.shortcut || ""
+                color: Qt.darker(root.bar ? root.bar.foreground : Color.foreground, 1.35)
+                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                font.pixelSize: Style.font.caption
+                font.bold: true
+              }
+            }
+            Column {
+              visible: row.rowType === "slider"
+              anchors.fill: parent
+              anchors.leftMargin: Style.space(8)
+              anchors.rightMargin: Style.space(8)
+              spacing: Style.space(4)
+              Row {
+                width: parent.width
+                Text {
+                  text: row.label || ""
+                  color: root.bar ? root.bar.foreground : Color.foreground
+                  font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                  font.pixelSize: Style.font.bodySmall
+                }
+                Item { width: Math.max(0, parent.width - parent.children[0].implicitWidth - sliderValue.implicitWidth); height: 1 }
+                Text {
+                  id: sliderValue
+                  text: String(Math.round(recentSlider.liveValue))
+                  color: root.bar ? root.bar.foreground : Color.foreground
+                  font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                  font.pixelSize: Style.font.bodySmall
+                  font.bold: true
+                }
+              }
+              PanelSlider {
+                id: recentSlider
+                width: parent.width
+                bar: root.bar
+                minimum: 3
+                maximum: 30
+                step: 1
+                integer: true
+                value: Number(row.value || root.maxProjects)
+                onReleased: function(value) { root.saveSetting("maxProjects", Math.round(value), true) }
+              }
             }
             MouseArea {
               id: mouse
               anchors.fill: parent; hoverEnabled: true
+              visible: row.rowType !== "slider"
               acceptedButtons: Qt.LeftButton | Qt.MiddleButton | Qt.RightButton
               onClicked: function(event) {
                 if (!root.selectable(row)) return
@@ -359,6 +564,61 @@ Panel {
                 if (row.rowType === "project" && event.button === Qt.RightButton) root.showActions(row)
                 else root.activate(index, row.rowType === "project" && event.button === Qt.MiddleButton)
               }
+            }
+          }
+        }
+        Column {
+          visible: !root.actionProject && !root.settingsOpen && !root.shortcutsOpen && !root.filterText
+          width: parent.width
+          spacing: Style.space(8)
+          PanelSeparator {
+            width: parent.width
+            foreground: root.bar ? root.bar.foreground : Color.foreground
+          }
+          Item {
+            id: repositoryFooter
+            width: parent.width
+            height: Style.space(22)
+            Text {
+              id: githubIcon
+              anchors.left: parent.left
+              anchors.leftMargin: Style.space(4)
+              anchors.verticalCenter: parent.verticalCenter
+              text: ""
+              color: footerMouse.containsMouse ? (root.bar ? root.bar.foreground : Color.foreground) : Qt.darker(root.bar ? root.bar.foreground : Color.foreground, 1.35)
+              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.pixelSize: Style.font.iconSmall
+            }
+            Text {
+              id: repositoryText
+              anchors.left: githubIcon.right
+              anchors.leftMargin: Style.space(7)
+              anchors.right: versionText.left
+              anchors.rightMargin: Style.space(10)
+              anchors.verticalCenter: parent.verticalCenter
+              text: root.repositoryName
+              elide: Text.ElideMiddle
+              color: footerMouse.containsMouse ? (root.bar ? root.bar.foreground : Color.foreground) : Qt.darker(root.bar ? root.bar.foreground : Color.foreground, 1.45)
+              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.pixelSize: Style.font.caption
+            }
+            Text {
+              id: versionText
+              anchors.right: parent.right
+              anchors.rightMargin: Style.space(4)
+              anchors.verticalCenter: parent.verticalCenter
+              text: root.appVersion ? ("v" + root.appVersion) : ""
+              color: Qt.darker(root.bar ? root.bar.foreground : Color.foreground, 1.45)
+              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.pixelSize: Style.font.caption
+              font.bold: true
+            }
+            MouseArea {
+              id: footerMouse
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: Quickshell.execDetached(["uwsm-app", "--", "xdg-open", root.repositoryUrl])
             }
           }
         }

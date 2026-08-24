@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "christestet.vscode-projects",
   "name": "VS Code Projects",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "author": "christestet",
   "license": "MIT",
-  "description": "Recent VS Code projects and useful editor actions in a native Omarchy bar panel.",
+  "description": "Recent VS Code projects, keyboard shortcuts, settings, and editor actions in a native Omarchy bar panel.",
   "kinds": ["bar-widget"],
   "entryPoints": {"barWidget": "Panel.qml"},
   "barWidget": {

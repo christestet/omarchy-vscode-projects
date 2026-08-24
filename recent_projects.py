@@ -21,6 +21,15 @@ EDITORS = (
 )
 
 
+def manifest_version(path: Path | None = None) -> str:
+    target = path or Path(__file__).with_name("manifest.json")
+    try:
+        value = json.loads(target.read_text()).get("version", "")
+    except (OSError, ValueError, AttributeError):
+        return ""
+    return str(value) if value else ""
+
+
 def preferred_editor(rows: list[dict]) -> str:
     available = [command for command, _ in EDITORS if shutil.which(command)]
     for row in rows:
@@ -63,6 +72,10 @@ def set_pin(path: str, editor: str, kind: str, pinned: bool) -> None:
         name = Path(normalized).stem if normalized.endswith(".code-workspace") else Path(normalized).name
         rows.insert(0, {"name": name or normalized, "path": normalized, "editor": editor, "kind": kind})
     save_pins(rows)
+
+
+def clear_pins() -> None:
+    save_pins([])
 
 
 def local_path(value: object) -> str | None:
@@ -150,12 +163,15 @@ def collect(limit: int, excluded: set[str] | None = None) -> list[dict]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", nargs="?", choices=("list", "pin", "unpin"), default="list")
+    parser.add_argument("action", nargs="?", choices=("list", "pin", "unpin", "unpin-all"), default="list")
     parser.add_argument("--limit", type=int, default=10)
     parser.add_argument("--path")
     parser.add_argument("--editor", default="code")
     parser.add_argument("--kind", default="folder")
     args = parser.parse_args()
+    if args.action == "unpin-all":
+        clear_pins()
+        return 0
     if args.action in ("pin", "unpin"):
         if not args.path:
             parser.error("--path is required")
@@ -164,7 +180,12 @@ def main() -> int:
     pins = [row for row in load_pins() if os.path.exists(str(row.get("path", "")))]
     pinned_paths = {str(row["path"]) for row in pins}
     recent = collect(max(1, min(args.limit, 100)), pinned_paths)
-    payload = {"pinned": pins, "recent": recent, "defaultEditor": preferred_editor(pins + recent)}
+    payload = {
+        "pinned": pins,
+        "recent": recent,
+        "defaultEditor": preferred_editor(pins + recent),
+        "version": manifest_version(),
+    }
     json.dump(payload, sys.stdout, ensure_ascii=False)
     print()
     return 0

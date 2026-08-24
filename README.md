@@ -2,9 +2,9 @@
 
 A compact, keyboard-friendly Omarchy bar widget for opening recent and pinned VS Code projects.
 
-Current version: [`0.2.1`](./manifest.json) · License: [MIT](./LICENSE) · Requires Omarchy 4.0+
+Current version: [`0.3.0`](./manifest.json) · License: [MIT](./LICENSE) · Requires Omarchy 4.0+
 
-![VS Code Projects panel showing pinned, recent, and action sections](./preview.png)
+![VS Code Projects panel showing pinned, recent, actions, and header controls](./preview.png)
 
 ## Features
 
@@ -13,6 +13,8 @@ Current version: [`0.2.1`](./manifest.json) · License: [MIT](./LICENSE) · Requ
 - Filters projects immediately as you type.
 - Opens projects in the current window or a new window.
 - Opens a terminal in the project, reveals its folder, or copies its path.
+- Includes a settings view for project limits, default open mode, refresh, and pin cleanup.
+- Shows a clickable repository link and manifest-sourced version in the default panel footer.
 - Uses Omarchy's native panel components, theme colors, spacing, typography, keyboard focus, and bar behavior.
 - Stores pins locally and performs no network requests or telemetry.
 
@@ -58,7 +60,7 @@ omarchy bar move christestet.vscode-projects --section right
 | Right click | Refresh recent projects |
 | Middle click | Open a new VS Code window |
 
-Hovering the icon displays the same controls in a native Omarchy tooltip.
+Hovering the icon shows the panel name and its `Super+Alt+O` shortcut in a concise native Omarchy tooltip.
 
 ### Project list
 
@@ -70,6 +72,10 @@ Hovering the icon displays the same controls in a native Omarchy tooltip.
 | Shift+Enter / Middle click | Open the project in a new window |
 | Right Arrow / Right click | Show project actions |
 | Escape | Clear search, return from actions, or close the panel |
+| 1–9 | Open the corresponding visible project |
+| Ctrl+O | Open a folder picker |
+| Ctrl+N | Open a new VS Code window |
+| Ctrl+R | Refresh recent projects |
 
 ### Project actions
 
@@ -79,6 +85,19 @@ Hovering the icon displays the same controls in a native Omarchy tooltip.
 - Reveal in files
 - Copy path
 - Pin or unpin project
+
+### Settings
+
+Select the gear button beside **VS Code Projects** to open Settings. From there you can:
+
+- Set the number of recent projects shown with a slider (3–30).
+- Choose whether projects reuse the current editor window or open a new one.
+- Refresh the project history.
+- Unpin all projects with a second-press confirmation.
+
+The slider supports dragging, clicking, and mouse-wheel adjustments. `−` and `+` remain available for keyboard adjustment. Changes are persisted through Omarchy's native bar configuration.
+
+Select the keyboard button beside **VS Code Projects** for a complete, scrollable reference of keyboard and mouse shortcuts. Select it again, press `Left`, or press `Escape` to return.
 
 Pinned projects are stored in:
 
@@ -113,10 +132,22 @@ The panel provides Omarchy's standard plugin IPC surface:
 omarchy-shell shell toggle christestet.vscode-projects
 omarchy-shell shell summon christestet.vscode-projects
 omarchy-shell shell hide christestet.vscode-projects
-omarchy-shell shell call christestet.vscode-projects refresh '{}'
+omarchy-shell christestet.vscode-projects refresh
+omarchy-shell christestet.vscode-projects openRecent
+omarchy-shell christestet.vscode-projects openFolder
+omarchy-shell christestet.vscode-projects newWindow
 ```
 
 These commands can be used from personal Hyprland keybindings.
+
+For example, add native Omarchy/Hyprland bindings to `~/.config/hypr/bindings.lua`:
+
+```lua
+o.bind("SUPER + ALT + O", "VS Code projects", "omarchy-shell shell toggle christestet.vscode-projects")
+o.bind("SUPER + CTRL + ALT + O", "Open recent VS Code project", "omarchy-shell christestet.vscode-projects openRecent")
+```
+
+Check `omarchy menu keybindings --print` first and change the chords if they conflict with existing bindings.
 
 ## How it works
 
