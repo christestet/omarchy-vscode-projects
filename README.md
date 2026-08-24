@@ -2,7 +2,7 @@
 
 A compact, keyboard-friendly Omarchy bar widget for opening recent and pinned VS Code projects.
 
-Current version: [`0.3.0`](./manifest.json) · License: [MIT](./LICENSE) · Requires Omarchy 4.0+
+Current version: [`0.3.1`](./manifest.json) · License: [MIT](./LICENSE) · Requires Omarchy 4.0+
 
 ![VS Code Projects panel showing pinned, recent, actions, and header controls](./preview.png)
 
@@ -152,6 +152,8 @@ Check `omarchy menu keybindings --print` first and change the chords if they con
 ## How it works
 
 `Panel.qml` renders the native bar button and popup. The folder picker runs as a separate Zenity process so GTK is kept outside the long-running Quickshell process. `recent_projects.py` reads the `history.recentlyOpenedPathsList` value from each editor's local `state.vscdb` database and falls back to workspace metadata when needed. It uses `/usr/bin/python3`, requires no third-party Python packages, and opens SQLite in read-only mode. Global actions automatically use the first available editor, preferring the editor associated with a pinned or recent project.
+
+Editor state is treated as untrusted, replaceable input. JSON values are limited to 1 MiB, SQLite databases and sidecars to 64 MiB, recursive history traversal to 4,096 nodes and 20 levels, and workspace discovery to 256 entries per editor. SQLite work, returned projects, pin data, helper output, and QML output accumulation are also bounded. Oversized or malformed state is ignored so it cannot exhaust the long-running shell process.
 
 Supported editor data directories:
 

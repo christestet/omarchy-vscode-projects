@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1 — 2026-08-24
+
+- Bound regular-file and SQLite reads, query work, recursive history traversal, workspace discovery, result counts, and helper/QML output.
+- Reject oversized, malformed, deeply nested, or symlinked editor state without disrupting the panel.
+- Bound persisted pin fields and folder-chooser output.
+
 ## 0.3.0 — 2026-08-24
 
 - Add native panel and open-recent IPC commands for Omarchy keybindings.

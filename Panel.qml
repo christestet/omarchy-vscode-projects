@@ -24,7 +24,9 @@ Panel {
   property int selectedIndex: 0
   property bool cursorActive: false
   property string output: ""
+  readonly property int maxHelperOutputChars: 524288
   property string chooserOutput: ""
+  readonly property int maxChooserOutputChars: 4096
   property string defaultEditor: "code"
   property string appVersion: ""
   property string copiedPath: ""
@@ -50,6 +52,18 @@ Panel {
       var value = JSON.parse(String(raw || "{}"))
       return value && !Array.isArray(value) ? value : ({})
     } catch (_) { return ({}) }
+  }
+
+  function appendHelperOutput(data) {
+    if (output.length >= maxHelperOutputChars) return
+    var chunk = String(data || "")
+    output += chunk.substring(0, maxHelperOutputChars - output.length)
+  }
+
+  function appendChooserOutput(data) {
+    if (chooserOutput.length >= maxChooserOutputChars) return
+    var chunk = String(data || "") + "\n"
+    chooserOutput += chunk.substring(0, maxChooserOutputChars - chooserOutput.length)
   }
 
   function projectRow(project, pinned) {
@@ -267,7 +281,7 @@ Panel {
 
   Process {
     id: loader
-    stdout: SplitParser { onRead: data => root.output += data }
+    stdout: SplitParser { onRead: data => root.appendHelperOutput(data) }
     onExited: function(code) {
       var payload = code === 0 ? root.parsePayload(root.output) : ({})
       root.pinnedProjects = Array.isArray(payload.pinned) ? payload.pinned : []
@@ -297,7 +311,7 @@ Panel {
   // Keep GTK's folder chooser outside the long-running Quickshell process.
   Process {
     id: folderChooser
-    stdout: SplitParser { onRead: data => root.chooserOutput += data + "\n" }
+    stdout: SplitParser { onRead: data => root.appendChooserOutput(data) }
     onExited: function(code) {
       var folder = root.chooserOutput.trim()
       if (code === 0 && folder) {
