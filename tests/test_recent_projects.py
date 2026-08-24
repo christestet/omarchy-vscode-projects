@@ -37,6 +37,14 @@ class RecentProjectsTest(unittest.TestCase):
                 recent_projects.set_pin(str(project), "codium", "folder", False)
                 self.assertEqual(recent_projects.load_pins(), [])
 
+    def test_prefers_available_editor_used_by_project(self):
+        with patch("recent_projects.shutil.which", side_effect=lambda command: "/usr/bin/" + command if command in ("code", "codium") else None):
+            self.assertEqual(recent_projects.preferred_editor([{"editor": "codium"}]), "codium")
+
+    def test_falls_back_to_first_available_editor(self):
+        with patch("recent_projects.shutil.which", side_effect=lambda command: "/usr/bin/codium" if command == "codium" else None):
+            self.assertEqual(recent_projects.preferred_editor([]), "codium")
+
 
 if __name__ == "__main__":
     unittest.main()

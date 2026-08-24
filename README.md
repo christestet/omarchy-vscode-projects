@@ -2,7 +2,7 @@
 
 A compact, keyboard-friendly Omarchy bar widget for opening recent and pinned VS Code projects.
 
-Current version: [`0.2.0`](./manifest.json) · License: [MIT](./LICENSE) · Requires Omarchy 4.0+
+Current version: [`0.2.1`](./manifest.json) · License: [MIT](./LICENSE) · Requires Omarchy 4.0+
 
 ![VS Code Projects panel showing pinned, recent, and action sections](./preview.png)
 
@@ -21,9 +21,17 @@ Remote workspaces are intentionally hidden because reopening them reliably depen
 ## Requirements
 
 - Omarchy 4.0 or newer
-- Python 3 (provided by the standard Omarchy installation)
-- Zenity for the folder picker
+- Python 3 (`python` package; standard library only)
+- Zenity (`zenity`) for the external folder picker
+- Wayland clipboard tools (`wl-clipboard`) for **Copy path**
+- Nautilus (`nautilus`) for **Reveal in files**
 - At least one supported editor command: `code`, `code-insiders`, `codium`, or `code-oss`
+
+Check the supporting commands with `command -v python3 zenity wl-copy nautilus`. Install anything missing with:
+
+```bash
+omarchy pkg add python zenity wl-clipboard nautilus
+```
 
 ## Installation
 
@@ -112,7 +120,7 @@ These commands can be used from personal Hyprland keybindings.
 
 ## How it works
 
-`Panel.qml` renders the native bar button and popup. `recent_projects.py` reads the `history.recentlyOpenedPathsList` value from each editor's local `state.vscdb` database and falls back to workspace metadata when needed. It uses Omarchy's system Python at `/usr/bin/python3`, requires no third-party Python packages, and opens SQLite in read-only mode.
+`Panel.qml` renders the native bar button and popup. The folder picker runs as a separate Zenity process so GTK is kept outside the long-running Quickshell process. `recent_projects.py` reads the `history.recentlyOpenedPathsList` value from each editor's local `state.vscdb` database and falls back to workspace metadata when needed. It uses `/usr/bin/python3`, requires no third-party Python packages, and opens SQLite in read-only mode. Global actions automatically use the first available editor, preferring the editor associated with a pinned or recent project.
 
 Supported editor data directories:
 
@@ -164,10 +172,10 @@ The plugin reads editor history only from local configuration files. It performs
 
 ## Store submission checklist
 
-- Push the repository publicly.
-- Tag a release matching the version in [`manifest.json`](./manifest.json).
+- Commit the release and push this repository publicly to GitHub.
+- Keep the README version synchronized with [`manifest.json`](./manifest.json).
 - Verify that `preview.png` contains no sensitive project names or paths.
-- Submit the public Git URL through the current Omarchy plugin-store contribution process.
+- Submit the public repository URL to the [Omarchy Plugin Marketplace](https://github.com/HANCORE-linux/omarchy-plugin-marketplace/issues/new/choose) using category `Developer Tools` and one to three supported tags such as `bar` and `quickshell`.
 
 ## License
 

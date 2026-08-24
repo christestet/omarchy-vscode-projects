@@ -20,6 +20,8 @@ Panel {
   property bool cursorActive: false
   property string output: ""
   property string chooserOutput: ""
+  property string defaultEditor: "code"
+  property string copiedPath: ""
   readonly property int maxProjects: boundedInt(setting("maxProjects", 10), 3, 30)
   readonly property bool newWindow: setting("openMode", "reuse") === "new"
   readonly property string helperPath: decodeURIComponent(String(Qt.resolvedUrl("recent_projects.py")).replace(/^file:\/\//, ""))
@@ -125,6 +127,14 @@ Panel {
     actionRunner.running = true
   }
 
+  function copyPath(path) {
+    if (!path || clipboardWriter.running) return
+    copiedPath = String(path)
+    clipboardWriter.command = ["wl-copy", "--", copiedPath]
+    clipboardWriter.running = true
+    close()
+  }
+
   function projectDirectory(project) {
     var path = String(project.path || "")
     if (project.kind !== "workspace") return path
@@ -139,14 +149,14 @@ Panel {
     else if (row.command === "open-new") openProject(project, true)
     else if (row.command === "terminal") { Quickshell.execDetached(["uwsm-app", "--", "xdg-terminal-exec", "--dir=" + projectDirectory(project)]); close() }
     else if (row.command === "files") { Quickshell.execDetached(["uwsm-app", "--", "nautilus", projectDirectory(project)]); close() }
-    else if (row.command === "copy") Quickshell.execDetached(["wl-copy", "--", project.path])
+    else if (row.command === "copy") copyPath(project.path)
     else if (row.command === "pin") togglePin(project)
     else if (row.command === "back") leaveActions()
     else if (row.command === "folder") {
       chooserOutput = ""
       folderChooser.command = ["zenity", "--file-selection", "--directory", "--title=Open folder in VS Code"]
       folderChooser.running = true
-    } else if (row.command === "new") { Quickshell.execDetached(["uwsm-app", "--", "code", "--new-window"]); close() }
+    } else if (row.command === "new") { Quickshell.execDetached(["uwsm-app", "--", defaultEditor, "--new-window"]); close() }
   }
 
   function activate(index, forceNew) {
@@ -180,16 +190,31 @@ Panel {
       var payload = code === 0 ? root.parsePayload(root.output) : ({})
       root.pinnedProjects = Array.isArray(payload.pinned) ? payload.pinned : []
       root.recentProjects = Array.isArray(payload.recent) ? payload.recent : []
+      root.defaultEditor = String(payload.defaultEditor || "code")
       root.rebuildRows()
     }
   }
   Process { id: actionRunner; onExited: function(_) { root.actionProject = null; root.refresh() } }
   Process {
+    id: clipboardWriter
+    onExited: function(code) {
+      if (code === 0) {
+        Quickshell.execDetached(["omarchy", "notification", "send", "Path copied", root.copiedPath, "-g", "󰆏"])
+      } else {
+        Quickshell.execDetached(["omarchy", "notification", "send", "Could not copy path", root.copiedPath, "-g", "", "-u", "critical"])
+      }
+    }
+  }
+  // Keep GTK's folder chooser outside the long-running Quickshell process.
+  Process {
     id: folderChooser
     stdout: SplitParser { onRead: data => root.chooserOutput += data + "\n" }
     onExited: function(code) {
       var folder = root.chooserOutput.trim()
-      if (code === 0 && folder) { Quickshell.execDetached(["uwsm-app", "--", "code", "--reuse-window", "--", folder]); root.close() }
+      if (code === 0 && folder) {
+        Quickshell.execDetached(["uwsm-app", "--", root.defaultEditor, "--reuse-window", "--", folder])
+        root.close()
+      }
     }
   }
 
@@ -201,7 +226,7 @@ Panel {
     tooltipText: "Left: projects · Right: refresh · Middle: new window"
     onPressed: function(code) {
       if (code === Qt.RightButton) root.refresh()
-      else if (code === Qt.MiddleButton) Quickshell.execDetached(["uwsm-app", "--", "code", "--new-window"])
+      else if (code === Qt.MiddleButton) Quickshell.execDetached(["uwsm-app", "--", root.defaultEditor, "--new-window"])
       else root.toggle()
     }
   }

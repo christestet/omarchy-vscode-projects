@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import shutil
 import sqlite3
 import sys
 import tempfile
@@ -18,6 +19,15 @@ EDITORS = (
     ("codium", "VSCodium"),
     ("code-oss", "Code - OSS"),
 )
+
+
+def preferred_editor(rows: list[dict]) -> str:
+    available = [command for command, _ in EDITORS if shutil.which(command)]
+    for row in rows:
+        editor = str(row.get("editor", ""))
+        if editor in available:
+            return editor
+    return available[0] if available else "code"
 
 
 def config_path() -> Path:
@@ -153,7 +163,8 @@ def main() -> int:
         return 0
     pins = [row for row in load_pins() if os.path.exists(str(row.get("path", "")))]
     pinned_paths = {str(row["path"]) for row in pins}
-    payload = {"pinned": pins, "recent": collect(max(1, min(args.limit, 100)), pinned_paths)}
+    recent = collect(max(1, min(args.limit, 100)), pinned_paths)
+    payload = {"pinned": pins, "recent": recent, "defaultEditor": preferred_editor(pins + recent)}
     json.dump(payload, sys.stdout, ensure_ascii=False)
     print()
     return 0
