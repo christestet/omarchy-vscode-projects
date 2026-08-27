@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "christestet.vscode-projects",
   "name": "VS Code Projects",
-  "version": "0.3.4",
+  "version": "0.4.0",
   "author": "christestet",
   "license": "MIT",
   "description": "Recent VS Code projects, keyboard shortcuts, settings, and editor actions backed by an optimized Rust helper.",
