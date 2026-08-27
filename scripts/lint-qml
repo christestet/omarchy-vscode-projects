@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+plugin_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$plugin_dir"
+
+omarchy_shell_root=${OMARCHY_SHELL_ROOT:-/usr/share/omarchy/shell}
+for module in Commons Ui; do
+  [[ -f $omarchy_shell_root/$module/qmldir ]] || {
+    echo "lint-qml: missing Omarchy QML module: $omarchy_shell_root/$module/qmldir" >&2
+    exit 1
+  }
+done
+
+qmllint_bin=${QMLLINT:-}
+if [[ -z $qmllint_bin ]]; then
+  if command -v qmllint >/dev/null; then
+    qmllint_bin=$(command -v qmllint)
+  elif [[ -x /usr/lib/qt6/bin/qmllint ]]; then
+    qmllint_bin=/usr/lib/qt6/bin/qmllint
+  else
+    echo "lint-qml: qmllint is required" >&2
+    exit 1
+  fi
+fi
+[[ -x $qmllint_bin ]] || {
+  echo "lint-qml: qmllint is not executable: $qmllint_bin" >&2
+  exit 1
+}
+
+mapfile -d '' -t qml_files < <(git ls-files -z -- '*.qml')
+(( ${#qml_files[@]} > 0 )) || {
+  echo "lint-qml: no tracked QML files found" >&2
+  exit 1
+}
+
+# Quickshell exposes the configuration root through the virtual `qs` import
+# namespace. Recreate that namespace for qmllint without modifying Omarchy.
+qml_import_root=$(mktemp -d)
+trap 'rm -rf -- "$qml_import_root"' EXIT
+mkdir -p "$qml_import_root/qs"
+ln -s "$omarchy_shell_root/Commons" "$qml_import_root/qs/Commons"
+ln -s "$omarchy_shell_root/Ui" "$qml_import_root/qs/Ui"
+
+# These checks are not statically expressible in the upstream metadata:
+# - Omarchy bar/settings objects and delegates intentionally use dynamic data.
+# - Quickshell's Process qmltypes omit QProcess::ExitStatus.
+# Keep every other qmllint warning fatal, including imports and unresolved types.
+"$qmllint_bin" \
+  -W 0 \
+  -I "$qml_import_root" \
+  --missing-property disable \
+  --signal-handler-parameters disable \
+  --unqualified disable \
+  "${qml_files[@]}"

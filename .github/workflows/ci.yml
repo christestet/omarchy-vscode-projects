@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  conventional-pr-title:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Validate Conventional Commit PR title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          pattern='^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\([a-z0-9._/-]+\))?!?: .+'
+          if [[ ! "$PR_TITLE" =~ $pattern ]]; then
+            echo "PR title must follow Conventional Commits, for example: fix(helper): handle an empty history" >&2
+            exit 1
+          fi
+
+  qml-lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    container:
+      image: archlinux:base-20260816.0.574111@sha256:bf88f8143c3ef21b14d0ebb8140099f0bf75ecfc3699f357ff92317a73f5aba9
+    steps:
+      - name: Install QML tooling
+        run: pacman --sync --refresh --sysupgrade --noconfirm --needed git quickshell
+
+      - name: Check out plugin source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check out Omarchy 4.0.0 QML modules
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: basecamp/omarchy
+          ref: f0020448ca87329199de7cb12f2015ebc4a3e5e7 # v4.0.0
+          path: .ci/omarchy
+          persist-credentials: false
+          sparse-checkout: |
+            shell/Commons
+            shell/Ui
+
+      - name: Lint QML against the minimum supported Omarchy version
+        env:
+          OMARCHY_SHELL_ROOT: ${{ github.workspace }}/.ci/omarchy/shell
+        run: ./scripts/lint-qml
+
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes jq libsqlite3-dev pkg-config
+
+      - name: Check release metadata and Omarchy manifest
+        run: ./scripts/check-release
+
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Lint Rust targets
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Run Rust tests
+        run: cargo test --locked
+
+      - name: Build release helper
+        run: cargo build --locked --release
+
+      - name: Build and inspect release bundle
+        run: |
+          ./scripts/package-release \
+            target/release/vsc-recent-projects \
+            dist \
+            x86_64-unknown-linux-gnu
+          tar -tzf dist/*.tar.gz
+          (cd dist && sha256sum *.tar.gz > SHA256SUMS && sha256sum --check SHA256SUMS)

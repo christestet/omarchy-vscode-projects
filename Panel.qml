@@ -1,5 +1,4 @@
 import QtQuick
-import QtQuick.Controls
 import Quickshell
 import Quickshell.Io
 import qs.Commons
@@ -92,7 +91,7 @@ Panel {
       ]
     } else if (shortcutsOpen) {
       next = [
-        {rowType: "section", label: "GLOBAL"},
+        {rowType: "section", label: "OPTIONAL GLOBAL"},
         {rowType: "info", label: "Toggle projects panel", icon: "󰨞", shortcut: "Super Alt O"},
         {rowType: "info", label: "Open most recent project", icon: "󰐕", shortcut: "Super Ctrl Alt O"},
         {rowType: "section", label: "PANEL"},
@@ -299,7 +298,7 @@ Panel {
       var validPayload = succeeded && Array.isArray(payload.pinned) && Array.isArray(payload.recent)
       root.loadError = validPayload ? "" : (root.loaderTimedOut
         ? "Project helper timed out"
-        : "Rust helper missing, failed, or returned invalid data; run scripts/build-helper")
+        : "Project helper missing or invalid; reinstall the release bundle or run scripts/build-helper from a source checkout")
       root.pinnedProjects = Array.isArray(payload.pinned) ? payload.pinned : []
       root.recentProjects = Array.isArray(payload.recent) ? payload.recent : []
       root.defaultEditor = String(payload.defaultEditor || "code")
@@ -355,7 +354,7 @@ Panel {
     anchors.fill: parent
     bar: root.bar
     text: "󰨞"
-    tooltipText: "VS Code Projects  ·  Press Super+Alt+O to open"
+    tooltipText: "VS Code Projects  ·  Left click to open"
     onPressed: function(code) {
       if (code === Qt.RightButton) root.refresh(true)
       else if (code === Qt.MiddleButton) root.openNewWindow()

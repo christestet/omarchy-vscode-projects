@@ -2,7 +2,12 @@
 
 A compact, keyboard-friendly Omarchy bar widget for opening recent and pinned VS Code projects.
 
-Current version: [`0.4.0`](./manifest.json) · License: [MIT](./LICENSE) · Requires Omarchy 4.0+
+Current version: [`0.4.0`](./manifest.json) <!-- x-release-please-version -->
+
+License: [MIT](./LICENSE) · Requires Omarchy 4.0+
+
+[![CI](https://github.com/christestet/omarchy-vscode-projects/actions/workflows/ci.yml/badge.svg)](https://github.com/christestet/omarchy-vscode-projects/actions/workflows/ci.yml)
+[![GitHub release](https://img.shields.io/github/v/release/christestet/omarchy-vscode-projects)](https://github.com/christestet/omarchy-vscode-projects/releases)
 
 ![VS Code Projects panel showing pinned, recent, actions, and header controls](./preview.png)
 
@@ -16,35 +21,72 @@ Current version: [`0.4.0`](./manifest.json) · License: [MIT](./LICENSE) · Requ
 - Includes a settings view for project limits, default open mode, refresh, and pin cleanup.
 - Shows a clickable repository link and release version in the default panel footer.
 - Uses Omarchy's native panel components, theme colors, spacing, typography, keyboard focus, and bar behavior.
-- Stores pins locally and performs no network requests or telemetry.
+- Stores pins locally and performs no background network requests or telemetry.
 
 Remote workspaces are intentionally hidden because reopening them reliably depends on their remote provider. Missing local paths and individual recent files are filtered out.
 
 ## Requirements
 
 - Omarchy 4.0 or newer
-- A Rust toolchain (`cargo` and `rustc`) plus `pkgconf` and SQLite to build the helper
 - Zenity (`zenity`) for the external folder picker
 - Wayland clipboard tools (`wl-clipboard`) for **Copy path**
 - Nautilus (`nautilus`) for **Reveal in files**
 - At least one supported editor command: `code`, `code-insiders`, `codium`, or `code-oss`
 
-Check the supporting commands with `command -v cargo rustc pkg-config zenity wl-copy nautilus`. Install anything missing with:
+Install the runtime dependencies with:
 
 ```bash
-omarchy pkg add rust pkgconf sqlite zenity wl-clipboard nautilus
+omarchy pkg add sqlite zenity wl-clipboard nautilus
 ```
 
 ## Installation
 
+### Prebuilt release bundle
+
+The x86_64 release bundle is the simplest installation path and does not require a Rust toolchain. The example uses GitHub CLI (`gh`); the same two assets can also be downloaded from the [Releases page](https://github.com/christestet/omarchy-vscode-projects/releases):
+
+```bash
+release_dir=$(mktemp -d)
+trap 'rm -rf -- "$release_dir"' EXIT
+gh release download --repo christestet/omarchy-vscode-projects \
+  --pattern '*-x86_64-unknown-linux-gnu.tar.gz' \
+  --pattern SHA256SUMS \
+  --dir "$release_dir"
+(cd "$release_dir" && sha256sum --check SHA256SUMS)
+gh attestation verify "$release_dir"/*.tar.gz \
+  --repo christestet/omarchy-vscode-projects
+mkdir -p "$HOME/.config/omarchy/plugins"
+tar -xzf "$release_dir"/*-x86_64-unknown-linux-gnu.tar.gz \
+  -C "$HOME/.config/omarchy/plugins"
+omarchy plugin validate "$HOME/.config/omarchy/plugins/christestet.vscode-projects"
+omarchy-shell shell rescanPlugins
+omarchy plugin enable christestet.vscode-projects --section right
+rm -rf -- "$release_dir"
+trap - EXIT
+```
+
+The checksum detects a damaged download, while `gh attestation verify` confirms that GitHub Actions built the archive from this repository. The archive contains exactly the runtime plugin directory: `manifest.json`, `Panel.qml`, the compiled helper, README, and license. Use this procedure for a fresh bundle installation; bundle installations are not git-managed checkouts and therefore cannot be updated with `omarchy plugin update`.
+
+### Build from source
+
 ```bash
 omarchy plugin add https://github.com/christestet/omarchy-vscode-projects.git
 cd ~/.config/omarchy/plugins/christestet.vscode-projects
+omarchy pkg add rust pkgconf sqlite
 ./scripts/build-helper
 omarchy plugin enable christestet.vscode-projects --section right
 ```
 
-Omarchy validates and clones plugin repositories but deliberately does not execute build hooks. The explicit build step compiles the auditable Rust source in release mode and installs the binary inside the plugin directory. The default bar placement is the right section.
+Omarchy validates and clones plugin repositories but deliberately does not execute build hooks. If `omarchy plugin add` asks whether to enable the plugin, leave it disabled until `./scripts/build-helper` has installed the helper. The explicit build step compiles the auditable Rust source in release mode and installs the binary inside the plugin directory. The default bar placement is the right section.
+
+### Omarchy compatibility
+
+| Omarchy version | Support | Installation |
+|---|---|---|
+| 4.0 or newer | Supported | Release bundle or source checkout |
+| Earlier than 4.0 | Not supported | No compatible plugin API |
+
+Omarchy 3.x used Waybar and did not provide the Quickshell manifest/plugin API this widget targets. A bundle containing this QML plugin cannot make it work on `<4.0.0`; supporting that line would require a separate Waybar module rather than a different package layout.
 
 To enable or move it later:
 
@@ -63,7 +105,7 @@ omarchy bar move christestet.vscode-projects --section right
 | Right click | Refresh recent projects and show a confirmation notification |
 | Middle click | Open a new VS Code window |
 
-Hovering the icon shows the panel name and its `Super+Alt+O` shortcut in a concise native Omarchy tooltip.
+Hovering the icon shows a concise native Omarchy tooltip. The plugin does not install a global shortcut; optional bindings are documented below.
 
 ### Project list
 
@@ -117,7 +159,7 @@ The widget exposes these settings through Omarchy's bar configuration:
 | `maxProjects` | `10` | Maximum number of recent projects, from 3 to 30 |
 | `openMode` | `reuse` | Open projects in the existing window (`reuse`) or a new window (`new`) |
 
-Example entry in `~/.config/omarchy/shell.json`:
+Example widget entry inside the desired `bar.layout` section of `~/.config/omarchy/shell.json`:
 
 ```json
 {
@@ -141,16 +183,16 @@ omarchy-shell christestet.vscode-projects openFolder
 omarchy-shell christestet.vscode-projects newWindow
 ```
 
-These commands can be used from personal Hyprland keybindings.
+These commands can be used from personal Hyprland keybindings. The plugin does not add or remove global keybindings itself.
 
-For example, add native Omarchy/Hyprland bindings to `~/.config/hypr/bindings.lua`:
+Before adding one, run `omarchy menu keybindings --print`. If a chord is already in use, choose another chord or explicitly unbind the existing action with `hl.unbind("...")` before the new `o.bind(...)` entry.
+
+For example, add optional native Omarchy/Hyprland bindings to `~/.config/hypr/bindings.lua`:
 
 ```lua
 o.bind("SUPER + ALT + O", "VS Code projects", "omarchy-shell shell toggle christestet.vscode-projects")
 o.bind("SUPER + CTRL + ALT + O", "Open recent VS Code project", "omarchy-shell christestet.vscode-projects openRecent")
 ```
-
-Check `omarchy menu keybindings --print` first and change the chords if they conflict with existing bindings.
 
 ## How it works
 
@@ -173,11 +215,15 @@ For current VS Code releases, the preferred MRU sources are `~/.vscode-shared/sh
 
 ## Updating and removal
 
+For a source checkout:
+
 ```bash
 omarchy plugin update christestet.vscode-projects
 cd ~/.config/omarchy/plugins/christestet.vscode-projects
 ./scripts/build-helper
 ```
+
+`omarchy plugin update` only updates git-managed source checkouts. For a release-bundle installation, remove the installed bundle and repeat the verified installation procedure above. Omarchy backs up a manually installed plugin directory during removal and prints the exact backup path.
 
 To remove it:
 
@@ -186,6 +232,26 @@ omarchy plugin remove christestet.vscode-projects
 ```
 
 Removing the plugin does not delete the optional pin file at `~/.config/omarchy/vscode-projects.json`.
+
+What happens to the helper binary depends on the installation method:
+
+- For a source checkout, Omarchy removes the complete git checkout, including `bin/vsc-recent-projects` and local build output inside it.
+- For a release bundle, Omarchy moves the complete plugin directory, including the binary, to the timestamped backup path printed by the command. After reviewing that path, delete that exact backup manually if you no longer need it.
+
+For a complete personal cleanup, also remove the pin file if you do not want to keep it:
+
+```bash
+rm -f -- "$HOME/.config/omarchy/vscode-projects.json"
+```
+
+Delete any optional `o.bind(...)` entries you copied into `~/.config/hypr/bindings.lua`. Reload and check Hyprland after changing bindings:
+
+```bash
+hyprctl reload
+hyprctl configerrors
+```
+
+The runtime and build packages installed above may be shared by other software, so the plugin removal command deliberately leaves them installed.
 
 ## Troubleshooting
 
@@ -204,19 +270,26 @@ omarchy-shell shell summon christestet.vscode-projects
 
 If no recent projects appear, open a local folder in a supported editor first. Remote-only workspaces and missing paths are intentionally omitted.
 
+If the panel reports that its helper is missing or invalid, run `./scripts/build-helper` in a source checkout. For a bundle installation, remove it and repeat the checksum- and provenance-verified installation instead of copying an unverified binary into `bin/`.
+
 ## Development
 
 ```bash
 omarchy plugin validate .
+./scripts/lint-qml
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 ./scripts/build-helper
+./scripts/check-release bin/vsc-recent-projects
+./scripts/package-release bin/vsc-recent-projects dist x86_64-unknown-linux-gnu
 ```
 
-Files below `~/.config/omarchy/plugins/` hot-reload during development. `Cargo.toml`, `manifest.json`, and the linked version text near the top of this README must carry the same release version.
+Files below `~/.config/omarchy/plugins/` hot-reload during development. Release Please keeps `Cargo.toml`, `Cargo.lock`, `manifest.json`, the linked README version, and `CHANGELOG.md` in sync from Conventional Commits. See [CONTRIBUTING.md](./CONTRIBUTING.md) for commit and release rules.
 
 ## Privacy and security
 
-The plugin reads editor history only from local configuration files. It performs no network requests and sends no telemetry. Like every Omarchy shell plugin, it runs unsandboxed inside `omarchy-shell`; review third-party plugin code before installing it.
+The plugin reads editor history only from local configuration files. It performs no background network requests and sends no telemetry. Selecting the repository link explicitly opens the project page in your browser. Like every Omarchy shell plugin, it runs unsandboxed inside `omarchy-shell`; review third-party plugin code before installing it. Please report vulnerabilities as described in [SECURITY.md](./SECURITY.md).
 
 ## License
 

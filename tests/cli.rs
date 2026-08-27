@@ -4,7 +4,7 @@ use std::process::Command;
 use serde_json::Value;
 
 fn helper() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_recent-projects"))
+    Command::new(env!("CARGO_BIN_EXE_vsc-recent-projects"))
 }
 
 #[test]

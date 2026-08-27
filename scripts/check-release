@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+plugin_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$plugin_dir"
+
+fail() {
+  echo "check-release: $*" >&2
+  exit 1
+}
+
+command -v cargo >/dev/null || fail "cargo is required"
+command -v jq >/dev/null || fail "jq is required"
+
+jq -e '
+  . as $manifest
+  | $manifest.schemaVersion == 1
+  and ($manifest.id | type == "string" and test("^[A-Za-z0-9][A-Za-z0-9._-]*$") and (contains("..") | not) and (startswith("omarchy.") | not))
+  and ($manifest.name | type == "string" and length > 0)
+  and ($manifest.version | type == "string" and test("^[0-9]+\\.[0-9]+\\.[0-9]+([+-][0-9A-Za-z.-]+)?$"))
+  and ($manifest.kinds | type == "array" and length > 0)
+  and ($manifest.entryPoints | type == "object")
+  and (($manifest.kinds | index("bar-widget")) == null or ($manifest.entryPoints.barWidget | type == "string"))
+  and ($manifest.barWidget.defaultSection == null or (["left", "center", "right"] | index($manifest.barWidget.defaultSection) != null))
+' manifest.json >/dev/null || fail "manifest.json does not satisfy the Omarchy schema checks"
+
+mapfile -t entry_points < <(jq -r '.entryPoints[]' manifest.json)
+for entry_point in "${entry_points[@]}"; do
+  [[ -n $entry_point ]] || fail "manifest entry point is empty"
+  [[ $entry_point != /* && $entry_point != *..* ]] || fail "unsafe manifest entry point: $entry_point"
+  [[ -f $entry_point ]] || fail "missing manifest entry point: $entry_point"
+done
+
+link=$(find . \
+  -path ./.git -prune -o \
+  -path ./target -prune -o \
+  -path ./dist -prune -o \
+  -type l -print -quit)
+[[ -z $link ]] || fail "symlinks are not allowed in a plugin checkout: $link"
+
+manifest_version=$(jq -r '.version' manifest.json)
+cargo_version=$(cargo metadata --locked --no-deps --format-version 1 |
+  jq -r '.packages[] | select(.name == "omarchy-vscode-projects") | .version')
+readme_version=$(sed -n 's/^Current version: \[`\([^`]*\)`\].*/\1/p' README.md)
+lock_version=$(awk '
+  $0 == "name = \"omarchy-vscode-projects\"" { package = 1; next }
+  package && /^version = / { sub(/^version = "/, ""); sub(/"$/, ""); print; exit }
+' Cargo.lock)
+
+[[ -n $cargo_version ]] || fail "could not read Cargo.toml version"
+[[ $manifest_version == "$cargo_version" ]] || fail "manifest.json ($manifest_version) and Cargo.toml ($cargo_version) differ"
+[[ $manifest_version == "$readme_version" ]] || fail "manifest.json ($manifest_version) and README.md ($readme_version) differ"
+[[ $manifest_version == "$lock_version" ]] || fail "manifest.json ($manifest_version) and Cargo.lock ($lock_version) differ"
+grep -q 'x-release-please-version' README.md || fail "README release-please version marker is missing"
+
+if command -v omarchy >/dev/null; then
+  omarchy plugin validate .
+fi
+
+if (( $# > 0 )); then
+  helper=$1
+  [[ -x $helper ]] || fail "release helper is not executable: $helper"
+  isolated_root=$(mktemp -d)
+  trap 'rm -rf -- "$isolated_root"' EXIT
+  mkdir -p "$isolated_root/home" "$isolated_root/config" "$isolated_root/shared"
+  payload=$(env \
+    HOME="$isolated_root/home" \
+    XDG_CONFIG_HOME="$isolated_root/config" \
+    VSCODE_SHARED_DATA_HOME="$isolated_root/shared" \
+    "$helper" list --limit 1)
+  binary_version=$(jq -er '.version' <<<"$payload") || fail "release helper did not return its version"
+  [[ $binary_version == "$manifest_version" ]] || fail "release helper ($binary_version) and manifest.json ($manifest_version) differ"
+fi
+
+echo "Release metadata is consistent at $manifest_version"

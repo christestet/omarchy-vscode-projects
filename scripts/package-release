@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+plugin_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$plugin_dir"
+
+if (( $# != 3 )); then
+  echo "Usage: scripts/package-release <helper-binary> <output-directory> <target-triple>" >&2
+  exit 2
+fi
+
+helper=$1
+output_dir=$2
+target=$3
+
+[[ -x $helper ]] || {
+  echo "package-release: helper is not executable: $helper" >&2
+  exit 1
+}
+
+case $target in
+x86_64-unknown-linux-gnu)
+  file "$helper" | grep -q 'x86-64' || {
+    echo "package-release: helper architecture does not match $target" >&2
+    exit 1
+  }
+  ;;
+*)
+  echo "package-release: unsupported target: $target" >&2
+  exit 1
+  ;;
+esac
+
+./scripts/check-release "$helper"
+
+plugin_id=$(jq -r '.id' manifest.json)
+version=$(jq -r '.version' manifest.json)
+mkdir -p "$output_dir"
+output_dir=$(cd -- "$output_dir" && pwd)
+archive="$output_dir/omarchy-vscode-projects-v${version}-${target}.tar.gz"
+
+staging_root=$(mktemp -d)
+trap 'rm -rf -- "$staging_root"' EXIT
+runtime_dir="$staging_root/$plugin_id"
+install -d "$runtime_dir/bin"
+install -m644 manifest.json Panel.qml README.md LICENSE "$runtime_dir/"
+install -m755 "$helper" "$runtime_dir/bin/vsc-recent-projects"
+
+if command -v omarchy >/dev/null; then
+  omarchy plugin validate "$runtime_dir"
+fi
+
+source_date_epoch=${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct 2>/dev/null || date +%s)}
+tar \
+  --sort=name \
+  --mtime="@$source_date_epoch" \
+  --owner=0 \
+  --group=0 \
+  --numeric-owner \
+  -C "$staging_root" \
+  -czf "$archive" \
+  "$plugin_id"
+
+echo "$archive"
