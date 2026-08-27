@@ -2,22 +2,46 @@
   "schemaVersion": 1,
   "id": "christestet.vscode-projects",
   "name": "VS Code Projects",
-  "version": "0.4.0",
+  "version": "0.3.4",
   "author": "christestet",
   "license": "MIT",
   "description": "Recent VS Code projects, keyboard shortcuts, settings, and editor actions backed by an optimized Rust helper.",
-  "kinds": ["bar-widget"],
-  "entryPoints": {"barWidget": "Panel.qml"},
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
   "barWidget": {
     "displayName": "VS Code Projects",
     "description": "Open recent projects and common VS Code actions.",
     "category": "Development",
     "allowMultiple": false,
     "defaultSection": "right",
-    "defaults": {"maxProjects": 10, "openMode": "reuse"},
+    "defaults": {
+      "maxProjects": 10,
+      "openMode": "reuse"
+    },
     "schema": [
-      {"key": "maxProjects", "type": "integer", "label": "Recent projects", "min": 3, "max": 30, "step": 1, "defaultValue": 10},
-      {"key": "openMode", "type": "enum", "label": "Open projects in", "options": ["reuse", "new"], "defaultValue": "reuse"}
+      {
+        "key": "maxProjects",
+        "type": "integer",
+        "label": "Recent projects",
+        "min": 3,
+        "max": 30,
+        "step": 1,
+        "defaultValue": 10
+      },
+      {
+        "key": "openMode",
+        "type": "enum",
+        "label": "Open projects in",
+        "options": [
+          "reuse",
+          "new"
+        ],
+        "defaultValue": "reuse"
+      }
     ]
   }
 }
