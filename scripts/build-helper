@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+plugin_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$plugin_dir"
+
+cargo build --locked --release
+install -Dm755 target/release/vsc-recent-projects bin/vsc-recent-projects.new
+mv -f bin/vsc-recent-projects.new bin/vsc-recent-projects
+
+echo "Built $plugin_dir/bin/vsc-recent-projects"

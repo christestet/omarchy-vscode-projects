@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.0 — 2026-08-27
+
+- Replace the Python helper with an optimized Rust binary while preserving the JSON command contract.
+- Keep editor-state reads bounded and descriptor-bound, including SQLite WAL/SHM sidecars.
+- Add a release build helper with LTO, stripped symbols, and atomic binary replacement.
+- Report a clear panel error when the Rust helper has not been built or fails.
+
 ## 0.3.3 — 2026-08-24
 
 - Show an Omarchy confirmation notification for explicit project-history refreshes from the panel, bar, shortcut, or IPC action.

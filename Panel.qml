@@ -33,10 +33,11 @@ Panel {
   property string pendingAction: ""
   property bool hasLoadedProjects: false
   property bool loaderTimedOut: false
+  property string loadError: ""
   readonly property int maxProjects: boundedInt(setting("maxProjects", 10), 3, 30)
   readonly property int helperTimeoutMs: 1000
   readonly property bool newWindow: setting("openMode", "reuse") === "new"
-  readonly property string helperPath: decodeURIComponent(String(Qt.resolvedUrl("recent_projects.py")).replace(/^file:\/\//, ""))
+  readonly property string helperPath: decodeURIComponent(String(Qt.resolvedUrl("bin/vsc-recent-projects")).replace(/^file:\/\//, ""))
   readonly property string repositoryUrl: "https://github.com/christestet/omarchy-vscode-projects"
   readonly property string repositoryName: repositoryUrl.substring(repositoryUrl.lastIndexOf("/") + 1)
 
@@ -134,7 +135,11 @@ Panel {
         next.push({rowType: "section", label: "RECENT"})
         for (var j = 0; j < recentProjects.length; j++) next.push(projectRow(recentProjects[j], false))
       } else if (pinnedProjects.length === 0) {
-        next.push({rowType: "empty", label: "No recent local projects", detail: "Open a folder in VS Code to get started"})
+        next.push({
+          rowType: "empty",
+          label: loadError ? "Could not load projects" : "No recent local projects",
+          detail: loadError || "Open a folder in VS Code to get started"
+        })
       }
       next.push({rowType: "section", label: "ACTIONS"})
       next.push({rowType: "command", command: "folder", label: "Open folder…", icon: "", shortcut: "Ctrl O"})
@@ -171,7 +176,7 @@ Panel {
     }
     output = ""
     loaderTimedOut = false
-    loader.command = ["/usr/bin/python3", helperPath, "list", "--limit", String(maxProjects)]
+    loader.command = [helperPath, "list", "--limit", String(maxProjects)]
     loader.running = true
   }
 
@@ -215,7 +220,7 @@ Panel {
     settingsRunner.running = true
   }
   function togglePin(project) {
-    actionRunner.command = ["/usr/bin/python3", helperPath, project.pinned ? "unpin" : "pin", "--path", project.path, "--editor", project.editor, "--kind", project.kind]
+    actionRunner.command = [helperPath, project.pinned ? "unpin" : "pin", "--path", project.path, "--editor", project.editor, "--kind", project.kind]
     actionRunner.running = true
   }
 
@@ -252,7 +257,7 @@ Panel {
       if (!confirmUnpinAll) { confirmUnpinAll = true; rebuildRows() }
       else {
         confirmUnpinAll = false
-        actionRunner.command = ["/usr/bin/python3", helperPath, "unpin-all"]
+        actionRunner.command = [helperPath, "unpin-all"]
         actionRunner.running = true
       }
     }
@@ -289,7 +294,12 @@ Panel {
     id: loader
     stdout: SplitParser { onRead: data => root.appendHelperOutput(data) }
     onExited: function(code) {
-      var payload = code === 0 && !root.loaderTimedOut ? root.parsePayload(root.output) : ({})
+      var succeeded = code === 0 && !root.loaderTimedOut
+      var payload = succeeded ? root.parsePayload(root.output) : ({})
+      var validPayload = succeeded && Array.isArray(payload.pinned) && Array.isArray(payload.recent)
+      root.loadError = validPayload ? "" : (root.loaderTimedOut
+        ? "Project helper timed out"
+        : "Rust helper missing, failed, or returned invalid data; run scripts/build-helper")
       root.pinnedProjects = Array.isArray(payload.pinned) ? payload.pinned : []
       root.recentProjects = Array.isArray(payload.recent) ? payload.recent : []
       root.defaultEditor = String(payload.defaultEditor || "code")
@@ -303,7 +313,7 @@ Panel {
     }
   }
   // This helper reads externally replaceable editor state. Keep a hard wall
-  // clock deadline outside Python so no malformed SQLite state can leave the
+  // clock deadline outside the helper so no malformed SQLite state can leave the
   // long-running shell process waiting indefinitely.
   Timer {
     id: loaderDeadline

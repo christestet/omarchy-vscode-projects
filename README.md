@@ -2,7 +2,7 @@
 
 A compact, keyboard-friendly Omarchy bar widget for opening recent and pinned VS Code projects.
 
-Current version: [`0.3.3`](./manifest.json) · License: [MIT](./LICENSE) · Requires Omarchy 4.0+
+Current version: [`0.4.0`](./manifest.json) · License: [MIT](./LICENSE) · Requires Omarchy 4.0+
 
 ![VS Code Projects panel showing pinned, recent, actions, and header controls](./preview.png)
 
@@ -14,7 +14,7 @@ Current version: [`0.3.3`](./manifest.json) · License: [MIT](./LICENSE) · Requ
 - Opens projects in the current window or a new window.
 - Opens a terminal in the project, reveals its folder, or copies its path.
 - Includes a settings view for project limits, default open mode, refresh, and pin cleanup.
-- Shows a clickable repository link and manifest-sourced version in the default panel footer.
+- Shows a clickable repository link and release version in the default panel footer.
 - Uses Omarchy's native panel components, theme colors, spacing, typography, keyboard focus, and bar behavior.
 - Stores pins locally and performs no network requests or telemetry.
 
@@ -23,25 +23,28 @@ Remote workspaces are intentionally hidden because reopening them reliably depen
 ## Requirements
 
 - Omarchy 4.0 or newer
-- Python 3 (`python` package; standard library only)
+- A Rust toolchain (`cargo` and `rustc`) plus `pkgconf` and SQLite to build the helper
 - Zenity (`zenity`) for the external folder picker
 - Wayland clipboard tools (`wl-clipboard`) for **Copy path**
 - Nautilus (`nautilus`) for **Reveal in files**
 - At least one supported editor command: `code`, `code-insiders`, `codium`, or `code-oss`
 
-Check the supporting commands with `command -v python3 zenity wl-copy nautilus`. Install anything missing with:
+Check the supporting commands with `command -v cargo rustc pkg-config zenity wl-copy nautilus`. Install anything missing with:
 
 ```bash
-omarchy pkg add python zenity wl-clipboard nautilus
+omarchy pkg add rust pkgconf sqlite zenity wl-clipboard nautilus
 ```
 
 ## Installation
 
 ```bash
-omarchy plugin add https://github.com/christestet/omarchy-vscode-projects.git --enable
+omarchy plugin add https://github.com/christestet/omarchy-vscode-projects.git
+cd ~/.config/omarchy/plugins/christestet.vscode-projects
+./scripts/build-helper
+omarchy plugin enable christestet.vscode-projects --section right
 ```
 
-Choose a bar section when prompted. The default placement is the right section.
+Omarchy validates and clones plugin repositories but deliberately does not execute build hooks. The explicit build step compiles the auditable Rust source in release mode and installs the binary inside the plugin directory. The default bar placement is the right section.
 
 To enable or move it later:
 
@@ -151,7 +154,9 @@ Check `omarchy menu keybindings --print` first and change the chords if they con
 
 ## How it works
 
-`Panel.qml` renders the native bar button and popup. The folder picker runs as a separate Zenity process so GTK is kept outside the long-running Quickshell process. `recent_projects.py` reads the ordered `history.recentlyOpenedPathsList` value from each editor's shared `state.vscdb` database (used by current VS Code) and falls back to the editor-local database and then legacy `storage.json`. It intentionally does not scan `workspaceStorage`, which is a cache rather than the Open Recent list. The helper uses `/usr/bin/python3`, requires no third-party Python packages, and opens SQLite in read-only mode. Global actions automatically use the first available editor, preferring the editor associated with a pinned or recent project.
+`Panel.qml` renders the native bar button and popup. The folder picker runs as a separate Zenity process so GTK is kept outside the long-running Quickshell process. The `vsc-recent-projects` Rust helper reads the ordered `history.recentlyOpenedPathsList` value from each editor's shared `state.vscdb` database (used by current VS Code) and falls back to the editor-local database and then legacy `storage.json`. It intentionally does not scan `workspaceStorage`, which is a cache rather than the Open Recent list. SQLite is opened read-only through the system library. Global actions automatically use the first available editor, preferring the editor associated with a pinned or recent project.
+
+The helper is a short-lived native process rather than a library loaded into the long-running shell. That matches the isolation pattern used by Omarchy's built-in plugins: QML owns presentation and IPC while bounded external work runs through `Quickshell.Io.Process`. A malformed editor database can therefore be killed by the panel's one-second deadline without taking down `omarchy-shell`.
 
 Editor state is treated as untrusted, replaceable input. JSON values and SQLite values are limited to 1 MiB; SQLite databases and sidecars to 64 MiB; and canonical history entries to 500. The helper opens the database and any WAL/SHM/journal sidecars as non-symlinked descriptors and presents those descriptors through a private SQLite namespace, preventing a path replacement from changing the checked files. SQLite work, returned projects, pin data, helper output, and QML output accumulation are bounded. The panel also force-kills a stalled helper after one second, so malformed state cannot leave the long-running shell process waiting indefinitely.
 
@@ -170,6 +175,13 @@ For current VS Code releases, the preferred MRU sources are `~/.vscode-shared/sh
 
 ```bash
 omarchy plugin update christestet.vscode-projects
+cd ~/.config/omarchy/plugins/christestet.vscode-projects
+./scripts/build-helper
+```
+
+To remove it:
+
+```bash
 omarchy plugin remove christestet.vscode-projects
 ```
 
@@ -196,10 +208,11 @@ If no recent projects appear, open a local folder in a supported editor first. R
 
 ```bash
 omarchy plugin validate .
-python3 -m unittest discover -s tests -v
+cargo test --locked
+./scripts/build-helper
 ```
 
-Files below `~/.config/omarchy/plugins/` hot-reload during development. Before publishing a release, update the version in `manifest.json` and the linked version text near the top of this README to the same value.
+Files below `~/.config/omarchy/plugins/` hot-reload during development. `Cargo.toml`, `manifest.json`, and the linked version text near the top of this README must carry the same release version.
 
 ## Privacy and security
 
