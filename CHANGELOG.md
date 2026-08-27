@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/christestet/omarchy-vscode-projects/compare/v0.3.4...v0.4.0) (2026-08-27)
+
+
+### Features
+
+* release Rust helper rewrite as v0.4.0 ([33c2885](https://github.com/christestet/omarchy-vscode-projects/commit/33c288585235b186acab8b69b4d5f20252fffb27))
+
 ## [0.3.4](https://github.com/christestet/omarchy-vscode-projects/compare/v0.3.3...v0.3.4) (2026-08-27)
 
 
