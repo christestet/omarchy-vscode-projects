@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.4](https://github.com/christestet/omarchy-vscode-projects/compare/v0.3.3...v0.3.4) (2026-08-27)
+
+
+### Bug Fixes
+
+* **ci: qmllint:** added git workspace on arch container image ([f412c89](https://github.com/christestet/omarchy-vscode-projects/commit/f412c89c4a8f32b195265ba2bab125760b05e0d4))
+
 ## 0.4.0 — 2026-08-27
 
 - Replace the Python helper with an optimized Rust binary while preserving the JSON command contract.
