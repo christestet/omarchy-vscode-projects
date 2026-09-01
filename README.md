@@ -15,11 +15,14 @@ License: [MIT](./LICENSE) · Requires Omarchy 4.0+
 
 - Reads recent local folders and `.code-workspace` files from VS Code, Insiders, VSCodium, and Code OSS.
 - Keeps pinned projects above the recent-project history.
-- Filters projects immediately as you type.
+- Filters projects immediately as you type, in a search field that shows the query, the match count, and a clear button.
 - Opens projects in the current window or a new window.
 - Opens a terminal in the project, reveals its folder, or copies its path.
-- Includes a settings view for project limits, default open mode, refresh, and pin cleanup.
-- Shows a clickable repository link and release version in the default panel footer.
+- Numbers the first nine projects so `1`–`9` open them directly; the tenth and beyond stay reachable by search and arrow keys.
+- Keeps **Open folder…** and **New window** in a compact bar above the search field, so they never scroll out of reach.
+- Abbreviates paths under your home directory to `~/…`.
+- Includes a settings view for project limits, default open mode, refresh, and pin cleanup, reachable by keyboard or by mouse.
+- Shows a clickable repository link and release version in the panel footer, in every view.
 - Uses Omarchy's native panel components, theme colors, spacing, typography, keyboard focus, and bar behavior.
 - Stores pins locally and performs no background network requests or telemetry.
 
@@ -105,22 +108,35 @@ omarchy bar move christestet.vscode-projects --section right
 | Right click | Refresh recent projects and show a confirmation notification |
 | Middle click | Open a new VS Code window |
 
-Hovering the icon shows a concise native Omarchy tooltip. The plugin does not install a global shortcut; optional bindings are documented below.
+Hovering the icon shows a native Omarchy tooltip with the recent and pinned counts. The plugin does not install a global shortcut; optional bindings are documented below.
 
 ### Project list
 
 | Input | Action |
 |---|---|
 | Type | Filter projects by name or path |
-| Up / Down | Move the selection |
+| Up / Down | Move the cursor; it wraps between the action bar and the row list |
+| Left / Right | Move between the two action buttons while the cursor is on them |
+| Home / End | Jump to the action bar or to the last row |
 | Enter / Left click | Open the selected project |
 | Shift+Enter / Middle click | Open the project in a new window |
 | Right Arrow / Right click | Show project actions |
 | Escape | Clear search, return from actions, or close the panel |
-| 1–9 | Open the corresponding visible project |
+| 1–9 | Open the numbered project (unfiltered list only) |
 | Ctrl+O | Open a folder picker |
 | Ctrl+N | Open a new VS Code window |
 | Ctrl+R | Refresh recent projects and show a confirmation notification |
+| Ctrl+, | Open settings |
+| F1 | Open the shortcut reference |
+| Tab / Shift+Tab | Switch to the neighbouring bar panel |
+
+While a search is active the first match carries the cursor, so `Enter` always
+opens the row you can see. The digits are search input then, which is why the
+numbers disappear from the rows as soon as you start typing.
+
+The two buttons above the search field are part of the same cursor ring: `Up`
+from the top row reaches them, `Down` returns to the list. `Ctrl+O` and `Ctrl+N`
+still trigger them from anywhere in the panel.
 
 ### Project actions
 
@@ -133,16 +149,16 @@ Hovering the icon shows a concise native Omarchy tooltip. The plugin does not in
 
 ### Settings
 
-Select the gear button beside **VS Code Projects** to open Settings. From there you can:
+Press `Ctrl+,` or select the gear button beside **VS Code Projects** to open Settings. From there you can:
 
 - Set the number of recent projects shown with a slider (3–30).
 - Choose whether projects reuse the current editor window or open a new one.
 - Refresh the project history with a confirmation notification.
-- Unpin all projects with a second-press confirmation.
+- Unpin all projects, behind Omarchy's native confirmation dialog.
 
 The slider supports dragging, clicking, and mouse-wheel adjustments. `−` and `+` remain available for keyboard adjustment. Changes are persisted through Omarchy's native bar configuration.
 
-Select the keyboard button beside **VS Code Projects** for a complete, scrollable reference of keyboard and mouse shortcuts. Select it again, press `Left`, or press `Escape` to return.
+Press `F1` or select the keyboard button beside **VS Code Projects** for a complete, scrollable reference of keyboard and mouse shortcuts. Press the same key again, press `Left`, or press `Escape` to return.
 
 Pinned projects are stored in:
 
