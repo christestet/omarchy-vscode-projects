@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.0](https://github.com/christestet/omarchy-vscode-projects/compare/v0.4.0...v0.5.0) (2026-09-03)
+
+
+### Features
+
+* **panel:** rework the projects panel ([1476e7a](https://github.com/christestet/omarchy-vscode-projects/commit/1476e7ad7d37064326f9859a705d361ac94331a5))
+* **panel:** rework the projects panel ([9c2115c](https://github.com/christestet/omarchy-vscode-projects/commit/9c2115cd5520d49a07291c2a53f6a11dc7ecbdd5))
+
 ## [0.4.0](https://github.com/christestet/omarchy-vscode-projects/compare/v0.3.4...v0.4.0) (2026-08-27)
 
 

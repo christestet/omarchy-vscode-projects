@@ -2,7 +2,7 @@
 
 A compact, keyboard-friendly Omarchy bar widget for opening recent and pinned VS Code projects.
 
-Current version: [`0.4.0`](./manifest.json) <!-- x-release-please-version -->
+Current version: [`0.5.0`](./manifest.json) <!-- x-release-please-version -->
 
 License: [MIT](./LICENSE) · Requires Omarchy 4.0+
 
