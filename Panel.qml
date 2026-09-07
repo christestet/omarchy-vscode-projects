@@ -61,6 +61,9 @@ Panel {
   // never be labelled "10" and then refuse to open.
   readonly property int maxQuickKeys: 9
   readonly property bool newWindow: setting("openMode", "reuse") === "new"
+  // Off by default: reopening a remote entry needs its editor extension and a
+  // reachable host, so the list stays local-only until the user opts in.
+  readonly property bool showRemote: setting("showRemote", false) === true
   readonly property string helperPath: decodeURIComponent(String(Qt.resolvedUrl("bin/vsc-recent-projects")).replace(/^file:\/\//, ""))
   readonly property string repositoryUrl: "https://github.com/christestet/omarchy-vscode-projects"
   readonly property string repositoryName: repositoryUrl.substring(repositoryUrl.lastIndexOf("/") + 1)
@@ -122,13 +125,78 @@ Panel {
     return value
   }
 
+  // Human-readable second line for a remote row. The URI is parsed only for
+  // display; it is always reopened verbatim, never rebuilt from these parts.
+  function remoteLabel(provider, uri) {
+    var names = {
+      "ssh-remote": "SSH",
+      "dev-container": "Dev Container",
+      "attached-container": "Attached Container",
+      "tunnel": "Tunnel",
+      "codespaces": "Codespace",
+      "wsl": "WSL",
+      "vfs-github": "GitHub",
+      "vfs-azurerepos": "Azure Repos"
+    }
+    var base = names[provider] || "Remote"
+    var match = String(uri || "").match(/^[a-z-]+:\/\/([^\/]*)(\/.*)?$/)
+    var host = ""
+    var inner = ""
+    if (match) {
+      // VS Code stores the authority `+` as `%2B`, e.g. ssh-remote%2B<host>.
+      var authority = match[1]
+      try { authority = decodeURIComponent(authority) } catch (_) {}
+      var plus = authority.indexOf("+")
+      host = plus >= 0 ? authority.substring(plus + 1) : authority
+      if (match[2]) {
+        try { inner = decodeURIComponent(match[2].split(/[?#]/)[0]) }
+        catch (_) { inner = match[2].split(/[?#]/)[0] }
+      }
+    }
+    if (provider.indexOf("vfs-") === 0) return base + (inner ? " · " + inner.replace(/^\//, "") : "")
+    // A dev/attached container authority is an opaque hash, so only the SSH,
+    // tunnel, codespace, and WSL hosts are worth showing.
+    var showHost = provider === "ssh-remote" || provider === "tunnel"
+      || provider === "codespaces" || provider === "wsl"
+    var label = base
+    if (showHost && host) label += " · " + host
+    if (inner) label += " · " + inner
+    return label
+  }
+
+  // Row glyph. Every remote provider gets its own mark so a remote entry is
+  // never mistaken for a local folder, and SSH is distinct from the rest.
+  function projectGlyph(row) {
+    if (row.pinned) return ""
+    if (row.remote) {
+      switch (row.provider) {
+      case "ssh-remote":          return "󰣀"
+      case "tunnel":              return "󱠹"
+      case "wsl":                 return "󰌛"
+      case "dev-container":
+      case "attached-container":  return "󰡨"
+      case "codespaces":          return "󰲙"
+      case "vfs-github":          return ""
+      case "vfs-azurerepos":      return "󱝀"
+      default:                    return "󰫆"
+      }
+    }
+    return row.kind === "workspace" ? "󰙅" : ""
+  }
+
   function projectRow(project, pinned) {
     var path = String(project.path || "")
+    var uri = String(project.uri || "")
+    var provider = String(project.provider || "")
+    var remote = uri !== ""
     return {
       rowType: "project",
-      name: String(project.name || path || "Project"),
+      name: String(project.name || path || uri || "Project"),
       path: path,
-      displayPath: displayPath(path),
+      uri: uri,
+      provider: provider,
+      remote: remote,
+      displayPath: remote ? remoteLabel(provider, uri) : displayPath(path),
       editor: String(project.editor || "code"),
       kind: String(project.kind || "folder"),
       pinned: pinned === true,
@@ -136,8 +204,14 @@ Panel {
     }
   }
 
+  // Remote rows are hidden unless the user has opted in through settings.
+  function keepProject(project) {
+    return root.showRemote || !project || !project.uri
+  }
+
   function matches(project, query) {
-    return (String(project.name || "") + " " + String(project.path || "")).toLowerCase().indexOf(query) >= 0
+    return (String(project.name || "") + " " + String(project.path || "") + " "
+      + String(project.uri || "") + " " + String(project.provider || "")).toLowerCase().indexOf(query) >= 0
   }
 
   // Digits stay bound to the unfiltered list only: while a filter is active
@@ -153,15 +227,19 @@ Panel {
   }
 
   function actionRows() {
-    return [
+    var remote = !!(actionProject && actionProject.remote)
+    var list = [
       {rowType: "command", command: "open", label: "Open", icon: "󰨞", shortcut: "Enter"},
       {rowType: "command", command: "open-new", label: "Open in new window", icon: "󰐕", shortcut: "Shift Enter"},
       {rowType: "command", command: "terminal", label: "Open terminal here", icon: ""},
       {rowType: "command", command: "files", label: "Reveal in files", icon: ""},
-      {rowType: "command", command: "copy", label: "Copy path", icon: "󰆏"},
+      {rowType: "command", command: "copy", label: remote ? "Copy URI" : "Copy path", icon: "󰆏"},
       {rowType: "command", command: "pin", label: actionProject && actionProject.pinned ? "Unpin project" : "Pin project", icon: actionProject && actionProject.pinned ? "󰤱" : ""},
       {rowType: "command", command: "back", label: "Back to projects", icon: "", shortcut: "Esc"}
     ]
+    // Terminal and file-manager actions need a local path; a remote row has none.
+    if (remote) list = list.filter(function(entry) { return entry.command !== "terminal" && entry.command !== "files" })
+    return list
   }
 
   function shortcutRows() {
@@ -197,6 +275,7 @@ Panel {
       {rowType: "section", label: "PROJECT DEFAULTS"},
       {rowType: "slider", command: "recent-limit", label: "Recent projects", detail: "How many entries the helper reads from VS Code history", value: maxProjects},
       {rowType: "toggle", command: "open-mode", label: "Open in new window", detail: newWindow ? "Every project opens its own window" : "Projects reuse the current window", checked: newWindow},
+      {rowType: "toggle", command: "show-remote", label: "Show remote projects", detail: showRemote ? "SSH, dev container, tunnel, and codespace entries are listed" : "Only local folders and workspaces are listed", checked: showRemote},
       {rowType: "section", label: "MAINTENANCE"},
       {rowType: "command", command: "refresh", label: "Refresh projects", icon: "󰑐", shortcut: "Ctrl R"},
       {rowType: "command", command: "unpin-all", label: "Unpin all projects", detail: pinnedProjects.length === 0 ? "No pinned projects" : "Keeps every project in VS Code history", icon: "󰤱", danger: true, disabled: pinnedProjects.length === 0},
@@ -375,9 +454,17 @@ Panel {
   }
 
   function openProject(project, forceNew) {
-    if (!project || !project.path) return
+    if (!project || (!project.path && !project.uri)) return
     var mode = forceNew || newWindow ? "--new-window" : "--reuse-window"
-    Quickshell.execDetached(["uwsm-app", "--", project.editor || "code", mode, "--", project.path])
+    var editor = project.editor || "code"
+    if (project.uri) {
+      // Hand the stored URI straight back to the editor; the matching Remote
+      // extension resolves it. Workspaces are files, folders are folders.
+      var flag = String(project.kind || "").indexOf("workspace") >= 0 ? "--file-uri" : "--folder-uri"
+      Quickshell.execDetached(["uwsm-app", "--", editor, mode, flag, project.uri])
+    } else {
+      Quickshell.execDetached(["uwsm-app", "--", editor, mode, "--", project.path])
+    }
     close()
   }
 
@@ -423,7 +510,9 @@ Panel {
 
   function togglePin(project) {
     if (!project || actionRunner.running) return
-    actionRunner.command = [helperPath, project.pinned ? "unpin" : "pin", "--path", project.path, "--editor", project.editor, "--kind", project.kind]
+    var target = project.uri || project.path
+    if (!target) return
+    actionRunner.command = [helperPath, project.pinned ? "unpin" : "pin", "--path", target, "--editor", project.editor, "--kind", project.kind]
     actionRunner.running = true
   }
 
@@ -458,13 +547,14 @@ Panel {
     else if (row.command === "open-new") openProject(project, true)
     else if (row.command === "terminal") { Quickshell.execDetached(["uwsm-app", "--", "xdg-terminal-exec", "--dir=" + projectDirectory(project)]); close() }
     else if (row.command === "files") { Quickshell.execDetached(["uwsm-app", "--", "nautilus", projectDirectory(project)]); close() }
-    else if (row.command === "copy") copyPath(project.path)
+    else if (row.command === "copy") copyPath(project.uri || project.path)
     else if (row.command === "pin") togglePin(project)
     else if (row.command === "back") goBack()
     else if (row.command === "folder") openFolderChooser()
     else if (row.command === "new") openNewWindow()
     else if (row.command === "refresh") refresh(true)
     else if (row.command === "open-mode") saveSetting("openMode", newWindow ? "reuse" : "new", false)
+    else if (row.command === "show-remote") saveSetting("showRemote", !showRemote, true)
     else if (row.command === "unpin-all") unpinConfirm.opened = true
   }
 
@@ -568,6 +658,11 @@ Panel {
     Qt.callLater(function() { keys.forceActiveFocus() })
   }
 
+  // The helper output does not depend on these, but the visible list and the
+  // read window do: re-run so a toggle or slider change takes effect at once.
+  onShowRemoteChanged: if (opened) refresh()
+  onMaxProjectsChanged: if (opened) refresh()
+
   PointerMoveGate {
     id: pointerGate
     referenceItem: keys
@@ -596,8 +691,8 @@ Panel {
       root.loadError = validPayload ? "" : (root.loaderTimedOut
         ? "Project helper timed out"
         : "Project helper missing or invalid; reinstall the release bundle or run scripts/build-helper from a source checkout")
-      root.pinnedProjects = Array.isArray(payload.pinned) ? payload.pinned : []
-      root.recentProjects = Array.isArray(payload.recent) ? payload.recent : []
+      root.pinnedProjects = (Array.isArray(payload.pinned) ? payload.pinned : []).filter(root.keepProject)
+      root.recentProjects = (Array.isArray(payload.recent) ? payload.recent : []).filter(root.keepProject)
       root.defaultEditor = String(payload.defaultEditor || "code")
       root.appVersion = String(payload.version || "")
       root.hasLoadedProjects = true
@@ -1060,7 +1155,7 @@ Panel {
                   width: Style.space(18)
                   horizontalAlignment: Text.AlignHCenter
                   text: parent.isProject
-                    ? (rowItem.row.pinned ? "" : (rowItem.row.kind === "workspace" ? "󰙅" : ""))
+                    ? root.projectGlyph(rowItem.row)
                     : (rowItem.row.icon || "")
                   color: parent.tint
                   font.family: root.fontFamily

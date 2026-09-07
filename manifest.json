@@ -20,7 +20,8 @@
     "defaultSection": "right",
     "defaults": {
       "maxProjects": 10,
-      "openMode": "reuse"
+      "openMode": "reuse",
+      "showRemote": false
     },
     "schema": [
       {
@@ -41,6 +42,13 @@
           "new"
         ],
         "defaultValue": "reuse"
+      },
+      {
+        "key": "showRemote",
+        "type": "boolean",
+        "label": "Show remote projects",
+        "description": "List SSH, dev container, tunnel, and codespace folders from VS Code history. Reopening one needs its Remote extension and a reachable host.",
+        "defaultValue": false
       }
     ]
   }

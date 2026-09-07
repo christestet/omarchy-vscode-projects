@@ -14,6 +14,7 @@ License: [MIT](./LICENSE) · Requires Omarchy 4.0+
 ## Features
 
 - Reads recent local folders and `.code-workspace` files from VS Code, Insiders, VSCodium, and Code OSS.
+- Optionally lists remote folders and workspaces from history — SSH, dev container, attached container, tunnel, codespace, WSL, and GitHub virtual filesystem — behind the **Show remote projects** setting (off by default).
 - Keeps pinned projects above the recent-project history.
 - Filters projects immediately as you type, in a search field that shows the query, the match count, and a clear button.
 - Opens projects in the current window or a new window.
@@ -26,7 +27,7 @@ License: [MIT](./LICENSE) · Requires Omarchy 4.0+
 - Uses Omarchy's native panel components, theme colors, spacing, typography, keyboard focus, and bar behavior.
 - Stores pins locally and performs no background network requests or telemetry.
 
-Remote workspaces are intentionally hidden because reopening them reliably depends on their remote provider. Missing local paths and individual recent files are filtered out.
+Remote projects are hidden until you enable **Show remote projects** in settings, because reopening one depends on its editor Remote extension and a reachable host or container. When enabled, the plugin reopens a remote entry by handing the exact `vscode-remote://` or `vscode-vfs://` URI VS Code stored back to `code`; it never rebuilds a URI, and an entry whose provider is gone simply fails to open with the editor's own error. Missing local paths and individual recent files are filtered out.
 
 ## Requirements
 
@@ -142,9 +143,9 @@ still trigger them from anywhere in the panel.
 
 - Open
 - Open in new window
-- Open terminal here
-- Reveal in files
-- Copy path
+- Open terminal here (local projects only)
+- Reveal in files (local projects only)
+- Copy path, or Copy URI for a remote project
 - Pin or unpin project
 
 ### Settings
@@ -153,6 +154,7 @@ Press `Ctrl+,` or select the gear button beside **VS Code Projects** to open Set
 
 - Set the number of recent projects shown with a slider (3–30).
 - Choose whether projects reuse the current editor window or open a new one.
+- Turn **Show remote projects** on or off. Off by default; when on, SSH, dev container, tunnel, codespace, WSL, and GitHub virtual-filesystem entries from history join the list.
 - Refresh the project history with a confirmation notification.
 - Unpin all projects, behind Omarchy's native confirmation dialog.
 
@@ -174,6 +176,7 @@ The widget exposes these settings through Omarchy's bar configuration:
 |---|---:|---|
 | `maxProjects` | `10` | Maximum number of recent projects, from 3 to 30 |
 | `openMode` | `reuse` | Open projects in the existing window (`reuse`) or a new window (`new`) |
+| `showRemote` | `false` | List remote folders and workspaces (SSH, dev container, tunnel, codespace, WSL, GitHub VFS) from history |
 
 Example widget entry inside the desired `bar.layout` section of `~/.config/omarchy/shell.json`:
 
@@ -181,7 +184,8 @@ Example widget entry inside the desired `bar.layout` section of `~/.config/omarc
 {
   "id": "christestet.vscode-projects",
   "maxProjects": 10,
-  "openMode": "reuse"
+  "openMode": "reuse",
+  "showRemote": false
 }
 ```
 
@@ -213,6 +217,8 @@ o.bind("SUPER + CTRL + ALT + O", "Open recent VS Code project", "omarchy-shell c
 ## How it works
 
 `Panel.qml` renders the native bar button and popup. The folder picker runs as a separate Zenity process so GTK is kept outside the long-running Quickshell process. The `vsc-recent-projects` Rust helper reads the ordered `history.recentlyOpenedPathsList` value from each editor's shared `state.vscdb` database (used by current VS Code) and falls back to the editor-local database and then legacy `storage.json`. It intentionally does not scan `workspaceStorage`, which is a cache rather than the Open Recent list. SQLite is opened read-only through the system library. Global actions automatically use the first available editor, preferring the editor associated with a pinned or recent project.
+
+Remote entries are parsed from the same history: a `vscode-remote://` URI with a known authority (`ssh-remote`, `dev-container`, `attached-container`, `tunnel`, `codespaces`, `wsl`) or a `vscode-vfs://` URI (`github`, `azurerepos`) becomes a project carrying that URI verbatim, with the same length and content limits as a local path. The panel replays it through `code --folder-uri` (or `--file-uri` for a workspace) and skips the local existence check, since there is no local path to stat. Unknown authorities and other schemes are rejected rather than guessed at.
 
 The helper is a short-lived native process rather than a library loaded into the long-running shell. That matches the isolation pattern used by Omarchy's built-in plugins: QML owns presentation and IPC while bounded external work runs through `Quickshell.Io.Process`. A malformed editor database can therefore be killed by the panel's one-second deadline without taking down `omarchy-shell`.
 
@@ -284,7 +290,7 @@ omarchy-shell shell rescanPlugins
 omarchy-shell shell summon christestet.vscode-projects
 ```
 
-If no recent projects appear, open a local folder in a supported editor first. Remote-only workspaces and missing paths are intentionally omitted.
+If no recent projects appear, open a local folder in a supported editor first. Missing local paths are intentionally omitted; remote entries appear only when **Show remote projects** is enabled in settings.
 
 If the panel reports that its helper is missing or invalid, run `./scripts/build-helper` in a source checkout. For a bundle installation, remove it and repeat the checksum- and provenance-verified installation instead of copying an unverified binary into `bin/`.
 
