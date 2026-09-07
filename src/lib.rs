@@ -56,12 +56,33 @@ impl Editor {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Project {
     pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub path: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub uri: String,
     pub editor: String,
     pub kind: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub provider: String,
+}
+
+impl Project {
+    /// The value that identifies a project across the recent list and the pin
+    /// file: the local path for local entries, the remote URI otherwise.
+    fn identity(&self) -> &str {
+        if self.uri.is_empty() {
+            &self.path
+        } else {
+            &self.uri
+        }
+    }
+
+    fn is_remote(&self) -> bool {
+        !self.uri.is_empty()
+    }
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -234,22 +255,163 @@ fn project_name(path: &str) -> String {
         .unwrap_or_else(|| path.to_string_lossy().into_owned())
 }
 
+// Remote authorities VS Code records that can be reopened by handing the stored
+// URI straight back to `code --folder-uri`. The list is deliberately closed: an
+// authority that is not on it is treated as unsupported rather than guessed at,
+// because reopening it reliably depends on a matching editor extension.
+const REMOTE_AUTHORITIES: [&str; 6] = [
+    "ssh-remote",
+    "dev-container",
+    "attached-container",
+    "tunnel",
+    "codespaces",
+    "wsl",
+];
+const VFS_AUTHORITIES: [&str; 2] = ["github", "azurerepos"];
+
+pub struct RemoteTarget {
+    pub uri: String,
+    pub provider: String,
+    pub name: String,
+    pub workspace: bool,
+}
+
+fn remote_segment_name(scheme: &str, authority: &str, path: &str) -> String {
+    let trimmed = path.trim_matches('/');
+    if scheme == "vscode-vfs" && !trimmed.is_empty() {
+        let decoded = percent_decode(trimmed).unwrap_or_else(|| trimmed.to_owned());
+        return truncate_chars(&decoded, MAX_NAME_CHARS);
+    }
+    // `authority` is already percent-decoded, so the host sits after a literal
+    // `+` (VS Code stores it as `%2B`).
+    let raw = trimmed
+        .rsplit('/')
+        .find(|value| !value.is_empty())
+        .map(str::to_owned)
+        .or_else(|| authority.split_once('+').map(|(_, host)| host.to_owned()))
+        .unwrap_or_else(|| authority.to_owned());
+    let decoded = percent_decode(&raw).unwrap_or(raw);
+    let stem = decoded.strip_suffix(".code-workspace").unwrap_or(&decoded);
+    let name = if stem.is_empty() { authority } else { stem };
+    truncate_chars(name, MAX_NAME_CHARS)
+}
+
+/// Parse a `vscode-remote://` or `vscode-vfs://` folder/workspace URI from VS
+/// Code history into a target the panel can replay verbatim. Returns `None` for
+/// local paths, unknown providers, and values unsafe to pass on a command line.
+pub fn remote_target(value: &str) -> Option<RemoteTarget> {
+    if value.is_empty() || value.chars().count() > MAX_PATH_CHARS {
+        return None;
+    }
+    // The URI is replayed verbatim as a `code` argument. Reject control
+    // characters and whitespace rather than quoting around them.
+    if value
+        .chars()
+        .any(|character| character.is_control() || character.is_whitespace())
+    {
+        return None;
+    }
+    let (scheme, rest) = value.split_once("://")?;
+    let (authority_raw, path) = match rest.find('/') {
+        Some(index) => (&rest[..index], &rest[index..]),
+        None => (rest, ""),
+    };
+    if authority_raw.is_empty() {
+        return None;
+    }
+    // VS Code percent-encodes the `+` between an authority kind and its host
+    // (`ssh-remote%2B<host>`). Decode before matching, but reopen the raw URI.
+    let authority = percent_decode(authority_raw).unwrap_or_else(|| authority_raw.to_owned());
+    let base = authority.split('+').next().unwrap_or(&authority);
+    let provider = match scheme {
+        "vscode-remote" if REMOTE_AUTHORITIES.contains(&base) => base.to_owned(),
+        "vscode-vfs" if VFS_AUTHORITIES.contains(&base) => format!("vfs-{base}"),
+        _ => return None,
+    };
+    let clean_path = path.split(['?', '#']).next().unwrap_or(path);
+    let workspace = clean_path
+        .rsplit('/')
+        .find(|value| !value.is_empty())
+        .map(|segment| segment.ends_with(".code-workspace"))
+        .unwrap_or(false);
+    Some(RemoteTarget {
+        uri: value.to_owned(),
+        name: remote_segment_name(scheme, &authority, clean_path),
+        provider: truncate_chars(&provider, 64),
+        workspace,
+    })
+}
+
+fn remote_kind(workspace: bool) -> String {
+    if workspace {
+        "remote-workspace".to_owned()
+    } else {
+        "remote-folder".to_owned()
+    }
+}
+
+/// Build a project from a history value or a pin path. Local paths keep the
+/// existing shape; a recognised remote URI becomes a project carrying the URI
+/// and its provider with an empty local path.
+fn make_project(value: &str, editor: &str, kind_hint: &str) -> Option<Project> {
+    if let Some(path) = local_path(value) {
+        let name = project_name(&path);
+        return Some(Project {
+            name: truncate_chars(&name, MAX_NAME_CHARS),
+            path,
+            uri: String::new(),
+            editor: truncate_chars(editor, 64),
+            kind: truncate_chars(kind_hint, 64),
+            provider: String::new(),
+        });
+    }
+    let remote = remote_target(value)?;
+    Some(Project {
+        name: remote.name,
+        path: String::new(),
+        editor: truncate_chars(editor, 64),
+        kind: remote_kind(remote.workspace),
+        uri: remote.uri,
+        provider: remote.provider,
+    })
+}
+
 fn project_from_value(value: &Value) -> Option<Project> {
     let row = value.as_object()?;
-    let path = local_path(row.get("path")?.as_str()?)?;
-    let fallback = project_name(&path);
-    let name = row
+    let editor = row.get("editor").and_then(Value::as_str).unwrap_or("code");
+    let custom_name = row
         .get("name")
         .and_then(Value::as_str)
+        .filter(|value| !value.is_empty());
+
+    if let Some(uri) = row
+        .get("uri")
+        .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
-        .unwrap_or(&fallback);
-    let editor = row.get("editor").and_then(Value::as_str).unwrap_or("code");
+    {
+        let remote = remote_target(uri)?;
+        let name = custom_name.map(str::to_owned).unwrap_or(remote.name);
+        return Some(Project {
+            name: truncate_chars(&name, MAX_NAME_CHARS),
+            path: String::new(),
+            editor: truncate_chars(editor, 64),
+            kind: remote_kind(remote.workspace),
+            uri: remote.uri,
+            provider: remote.provider,
+        });
+    }
+
+    let path = local_path(row.get("path")?.as_str()?)?;
+    let fallback = project_name(&path);
+    let name = custom_name.unwrap_or(&fallback);
     let kind = row.get("kind").and_then(Value::as_str).unwrap_or("folder");
     Some(Project {
         name: truncate_chars(name, MAX_NAME_CHARS),
         path,
+        uri: String::new(),
         editor: truncate_chars(editor, 64),
         kind: truncate_chars(kind, 64),
+        provider: String::new(),
     })
 }
 
@@ -297,22 +459,15 @@ pub fn set_pin_at(
     kind: &str,
     pinned: bool,
 ) -> io::Result<()> {
-    let normalized = local_path(path)
+    let project = make_project(path, editor, kind)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid project path"))?;
+    let identity = project.identity().to_owned();
     let mut rows: Vec<Project> = load_pins_from(config)
         .into_iter()
-        .filter(|row| row.path != normalized)
+        .filter(|row| row.identity() != identity)
         .collect();
     if pinned {
-        rows.insert(
-            0,
-            Project {
-                name: truncate_chars(&project_name(&normalized), MAX_NAME_CHARS),
-                path: normalized,
-                editor: truncate_chars(editor, 64),
-                kind: truncate_chars(kind, 64),
-            },
-        );
+        rows.insert(0, project);
     }
     save_pins_to(config, &rows)
 }
@@ -450,19 +605,20 @@ fn add_project(
     editor: &str,
     kind: &str,
 ) {
-    let Some(path) = local_path(value) else {
+    let Some(project) = make_project(value, editor, kind) else {
         return;
     };
-    if seen.contains(&path) || !Path::new(&path).exists() {
+    let identity = project.identity().to_owned();
+    if seen.contains(&identity) {
         return;
     }
-    seen.insert(path.clone());
-    rows.push(Project {
-        name: project_name(&path),
-        path,
-        editor: editor.to_owned(),
-        kind: kind.to_owned(),
-    });
+    // A remote URI has no local path to stat; trust the history entry and let a
+    // failed reopen surface as the editor's own error.
+    if !project.is_remote() && !Path::new(&project.path).exists() {
+        return;
+    }
+    seen.insert(identity);
+    rows.push(project);
 }
 
 fn collect_with_roots(
@@ -551,9 +707,9 @@ pub fn preferred_editor(rows: &[Project]) -> String {
 pub fn list_payload(limit: usize) -> ListPayload {
     let pinned: Vec<Project> = load_pins()
         .into_iter()
-        .filter(|row| Path::new(&row.path).exists())
+        .filter(|row| row.is_remote() || Path::new(&row.path).exists())
         .collect();
-    let excluded: HashSet<String> = pinned.iter().map(|row| row.path.clone()).collect();
+    let excluded: HashSet<String> = pinned.iter().map(|row| row.identity().to_owned()).collect();
     let recent = collect(limit.clamp(1, 100), &excluded);
     let all: Vec<Project> = pinned.iter().chain(&recent).cloned().collect();
     ListPayload {
@@ -587,6 +743,7 @@ mod tests {
             path: path.to_string_lossy().into_owned(),
             editor: editor.to_owned(),
             kind: "folder".to_owned(),
+            ..Project::default()
         }
     }
 
@@ -608,6 +765,102 @@ mod tests {
         );
         assert!(local_path("vscode-remote://ssh-remote/project").is_none());
         assert!(local_path("file://server/tmp/project").is_none());
+    }
+
+    #[test]
+    fn remote_target_accepts_known_authorities_and_replays_verbatim() {
+        let ssh = remote_target("vscode-remote://ssh-remote+devbox/home/me/api").unwrap();
+        assert_eq!(ssh.uri, "vscode-remote://ssh-remote+devbox/home/me/api");
+        assert_eq!(ssh.provider, "ssh-remote");
+        assert_eq!(ssh.name, "api");
+        assert!(!ssh.workspace);
+
+        // VS Code stores the authority `+` percent-encoded; the raw URI is kept.
+        let encoded =
+            remote_target("vscode-remote://ssh-remote%2Bbuildbox/srv/work/service").unwrap();
+        assert_eq!(
+            encoded.uri,
+            "vscode-remote://ssh-remote%2Bbuildbox/srv/work/service"
+        );
+        assert_eq!(encoded.provider, "ssh-remote");
+        assert_eq!(encoded.name, "service");
+
+        let container =
+            remote_target("vscode-remote://dev-container+a1b2c3/workspaces/app%20one").unwrap();
+        assert_eq!(container.provider, "dev-container");
+        assert_eq!(container.name, "app one");
+
+        let vfs = remote_target("vscode-vfs://github/christestet/omarchy-vscode-projects").unwrap();
+        assert_eq!(vfs.provider, "vfs-github");
+        assert_eq!(vfs.name, "christestet/omarchy-vscode-projects");
+
+        let workspace =
+            remote_target("vscode-remote://ssh-remote+devbox/home/me/api.code-workspace?x=1")
+                .unwrap();
+        assert!(workspace.workspace);
+    }
+
+    #[test]
+    fn remote_target_rejects_unknown_providers_and_unsafe_values() {
+        assert!(remote_target("vscode-remote://mystery+host/path").is_none());
+        assert!(remote_target("vscode-vfs://gitlab/owner/repo").is_none());
+        assert!(remote_target("file:///tmp/project").is_none());
+        assert!(remote_target("/tmp/project").is_none());
+        assert!(remote_target("vscode-remote://ssh-remote+host/a b").is_none());
+        assert!(
+            remote_target(&format!(
+                "vscode-remote://ssh-remote+host/{}",
+                "x".repeat(MAX_PATH_CHARS)
+            ))
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn collect_includes_remote_entries_without_a_local_path_check() {
+        let temp = tempfile::tempdir().unwrap();
+        let shared = temp.path().join(".vscode-shared/sharedStorage/state.vscdb");
+        fs::create_dir_all(shared.parent().unwrap()).unwrap();
+        let db = Connection::open(&shared).unwrap();
+        db.execute("CREATE TABLE ItemTable (key TEXT, value TEXT)", [])
+            .unwrap();
+        db.execute(
+            "INSERT INTO ItemTable VALUES (?1, ?2)",
+            params![
+                "history.recentlyOpenedPathsList",
+                json!({"entries": [
+                    {"folderUri": "vscode-remote://ssh-remote+devbox/home/me/api"},
+                    {"folderUri": "file:///definitely/missing/local"}
+                ]})
+                .to_string()
+            ],
+        )
+        .unwrap();
+        drop(db);
+
+        let rows = collect_with_roots(5, &HashSet::new(), temp.path(), temp.path());
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].uri, "vscode-remote://ssh-remote+devbox/home/me/api");
+        assert_eq!(rows[0].kind, "remote-folder");
+        assert!(rows[0].path.is_empty());
+    }
+
+    #[test]
+    fn remote_pins_round_trip_by_uri() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = temp.path().join("omarchy/vscode-projects.json");
+        let uri = "vscode-remote://ssh-remote+devbox/home/me/api";
+        set_pin_at(&config, uri, "code", "remote-folder", true).unwrap();
+
+        let pins = load_pins_from(&config);
+        assert_eq!(pins.len(), 1);
+        assert!(pins[0].path.is_empty());
+        assert_eq!(pins[0].uri, uri);
+        assert_eq!(pins[0].provider, "ssh-remote");
+        assert!(pins[0].is_remote());
+
+        set_pin_at(&config, uri, "code", "remote-folder", false).unwrap();
+        assert!(load_pins_from(&config).is_empty());
     }
 
     #[test]
@@ -842,6 +1095,7 @@ mod tests {
             path: "/tmp".to_owned(),
             editor: "codium".to_owned(),
             kind: "folder".to_owned(),
+            ..Project::default()
         }];
         assert_eq!(
             preferred_editor_with(&rows, |command| command == "code" || command == "codium"),
