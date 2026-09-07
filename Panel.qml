@@ -164,15 +164,22 @@ Panel {
     return label
   }
 
-  // Row glyph, chosen so a remote entry never looks like a local folder:
-  // pinned star, then a per-kind remote mark, then the local folder or workspace.
+  // Row glyph. Every remote provider gets its own mark so a remote entry is
+  // never mistaken for a local folder, and SSH is distinct from the rest.
   function projectGlyph(row) {
     if (row.pinned) return ""
     if (row.remote) {
-      if (row.provider === "dev-container" || row.provider === "attached-container") return "󰅘"
-      if (row.provider === "vfs-github" || row.provider === "vfs-azurerepos") return ""
-      if (row.provider === "codespaces") return ""
-      return "󰣀"
+      switch (row.provider) {
+      case "ssh-remote":          return "󰣀"
+      case "tunnel":              return "󱠹"
+      case "wsl":                 return "󰌛"
+      case "dev-container":
+      case "attached-container":  return "󰡨"
+      case "codespaces":          return "󰲙"
+      case "vfs-github":          return ""
+      case "vfs-azurerepos":      return "󱝀"
+      default:                    return "󰫆"
+      }
     }
     return row.kind === "workspace" ? "󰙅" : ""
   }
