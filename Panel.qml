@@ -170,7 +170,7 @@ Panel {
     if (row.pinned) return ""
     if (row.remote) {
       switch (row.provider) {
-      case "ssh-remote":          return "󰣀"
+      case "ssh-remote":          return ""
       case "tunnel":              return "󱠹"
       case "wsl":                 return "󰌛"
       case "dev-container":
