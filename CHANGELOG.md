@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.0](https://github.com/christestet/omarchy-vscode-projects/compare/v0.5.0...v0.6.0) (2026-09-07)
+
+
+### Features
+
+* list remote projects from VS Code history ([#5](https://github.com/christestet/omarchy-vscode-projects/issues/5)) ([3c8e40b](https://github.com/christestet/omarchy-vscode-projects/commit/3c8e40bf3fee4f00434b81ae0096e5acb41b8f97))
+
+
+### Bug Fixes
+
+* use the VS Code remote glyph for SSH rows ([cc14b6a](https://github.com/christestet/omarchy-vscode-projects/commit/cc14b6a7c72c420ae507558a13062af3735cfee8))
+
 ## [0.5.0](https://github.com/christestet/omarchy-vscode-projects/compare/v0.4.0...v0.5.0) (2026-09-03)
 
 
